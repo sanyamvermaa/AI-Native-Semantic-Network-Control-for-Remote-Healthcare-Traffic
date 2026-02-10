@@ -15,7 +15,7 @@ SEND_INTERVAL = 0.01  # seconds
 seq_num = 0
 
 # CSV file
-with open("sender_log.csv", "w", newline="") as f:
+with open("csv/sender_log.csv", "w", newline="") as f:  
     writer = csv.writer(f)
     writer.writerow(["seq", "timestamp", "heart_rate", "label"])
 
@@ -55,7 +55,7 @@ while True:
     sock.sendto(message.encode(), server)
 
     # Log to CSV
-    with open("sender_log.csv", "a", newline="") as f:
+    with open("csv/sender_log.csv", "a", newline="") as f:
         writer = csv.writer(f)
         writer.writerow([seq_num, now, hr, label])
 

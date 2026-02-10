@@ -7,11 +7,11 @@ sock.bind(("127.0.0.1", 9000))
 
 print("Healthcare receiver listening...")
 
-with open("receiver_log.csv", "w", newline="") as f:
+with open("csv/receiver_log.csv", "w", newline="") as f:
     writer = csv.writer(f)
     writer.writerow(["seq", "send_time", "recv_time", "heart_rate", "label", "delay"])
 
-telemetry_file = open("network_telemetry.csv", "w", newline="")
+telemetry_file = open("csv/network_telemetry.csv", "w", newline="")
 telemetry_writer = csv.writer(telemetry_file)
 telemetry_writer.writerow([
     "timestamp",
@@ -70,7 +70,8 @@ while True:
     expected_seq = seq + 1
     received_packets += 1
 
-    with open("receiver_log.csv", "a", newline="") as f:
+    # Update file path for appending to log file to use csv/ directory
+    with open("csv/receiver_log.csv", "a", newline="") as f:
         writer = csv.writer(f)
         writer.writerow([seq, send_time, recv_time, hr, label, delay])
 
