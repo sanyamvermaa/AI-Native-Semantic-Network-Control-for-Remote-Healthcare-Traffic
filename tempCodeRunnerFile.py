@@ -23,7 +23,7 @@ import signal
 import pandas as pd
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-DURATION_SECONDS  = 3600        # 15-minute capture
+DURATION_SECONDS  = 900         # 15-minute capture
 BASE_DIR          = "/home/ayhm23/health_data/csv"
 GROUND_TRUTH_FILE = os.path.join(BASE_DIR, "ground_truth_log.csv")
 os.makedirs(BASE_DIR, exist_ok=True)
@@ -47,28 +47,32 @@ DEVICES = [
 
 # ── Network Profiles ──────────────────────────────────────────────────────────
 # Tighter ranges compared to v1 → cleaner class separation in feature space.
+# Each entry is (min, max) for (loss%, delay_ms, jitter_ms).
 PROFILES = {
     "Stable": {
         "loss":     (0.0,  0.8),
         "delay":    (5,    25),
         "jitter":   (0,    4),
-        "duration": (18,   24),   # slightly shorter — high yield
+        "duration": (20,   35),   
     },
     "Unstable": {
-        "loss":     (3.0,  7.0),
-        "delay":    (40,   120),
+        "loss":     (1.5,  6.0),
+        "delay":    (30,   90),
         "jitter":   (8,    25),
-        "duration": (22,   30),   # medium
+        "duration": (15,   25),   
     },
     "Critical": {
         "loss":     (8.0,  22.0),
         "delay":    (130,  380),
         "jitter":   (35,   90),
-        "duration": (26,   34),   # longest — compensates for low yield
+        "duration": (20,   35),    
     },
 }
 
-STATE_WEIGHTS = {"Stable": 0.33, "Unstable": 0.34, "Critical": 0.33}
+
+# Weighted random state transitions
+
+STATE_WEIGHTS = {"Stable": 0.34, "Unstable": 0.33, "Critical": 0.33}
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def run(cmd, **kwargs):
     subprocess.run(cmd, shell=True, check=True, **kwargs)
@@ -115,7 +119,7 @@ def merge_data():
     print(f"    Telemetry range     : {telem_df['timestamp'].min():.1f} -> {telem_df['timestamp'].max():.1f}")
     print(f"    Ground truth range  : {truth_df['start_time'].min():.1f} -> {truth_df['end_time'].max():.1f}")
 
-    TRANSITION_BUFFER = 0.1   # increased from 0.1 to prevent label contamination
+    TRANSITION_BUFFER = 0.5   # increased from 0.1 to prevent label contamination
 
     def get_label(ts):
         match = truth_df[
