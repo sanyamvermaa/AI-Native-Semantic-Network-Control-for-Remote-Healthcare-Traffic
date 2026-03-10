@@ -1,17 +1,23 @@
 import socket
 import time
 import csv
+import os
+
+BASE_DIR = "/home/ayhm23/health_data/csv"
+os.makedirs(BASE_DIR, exist_ok=True)
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.bind(("127.0.0.1", 9000))
+sock.bind(("0.0.0.0", 9000))
 
 print("Healthcare receiver listening...")
 
-with open("csv/receiver_log.csv", "w", newline="") as f:
+
+
+with open(os.path.join(BASE_DIR, "receiver_log.csv"), "w", newline="") as f:
     writer = csv.writer(f)
     writer.writerow(["seq", "send_time", "recv_time", "heart_rate", "label", "delay"])
 
-telemetry_file = open("csv/network_telemetry.csv", "w", newline="")
+telemetry_file = open(os.path.join(BASE_DIR, "network_telemetry.csv"), "w", newline="")
 telemetry_writer = csv.writer(telemetry_file)
 telemetry_writer.writerow([
     "timestamp",
@@ -37,7 +43,7 @@ jitter_count = 0
 # Modeled queue length
 queue_length = 0
 
-telemetry_interval = 1.0
+telemetry_interval = 0.5
 last_telemetry_time = time.time()
 
 while True:
@@ -71,7 +77,7 @@ while True:
     received_packets += 1
 
     # Update file path for appending to log file to use csv/ directory
-    with open("csv/receiver_log.csv", "a", newline="") as f:
+    with open(os.path.join(BASE_DIR, "receiver_log.csv"), "a", newline="") as f:
         writer = csv.writer(f)
         writer.writerow([seq, send_time, recv_time, hr, label, delay])
 
@@ -86,16 +92,9 @@ while True:
         bandwidth_usage_bps = bytes_attempted / telemetry_interval
 
         total_attempted = received_packets + lost_packets
-        if total_attempted > 0:
-            packet_loss_rate = lost_packets / total_attempted
-        else:
-            packet_loss_rate = 0.0
+        packet_loss_rate = lost_packets / total_attempted if total_attempted > 0 else 0.0
 
-        if jitter_count > 0:
-            avg_jitter = jitter_sum / jitter_count
-        else:
-            avg_jitter = 0.0
-
+        avg_jitter = jitter_sum / jitter_count if jitter_count > 0 else 0.0
         queue_length += lost_packets
 
         telemetry_writer.writerow([
@@ -106,8 +105,8 @@ while True:
             round(avg_jitter, 6),
             queue_length
         ])
+        telemetry_file.flush()  
 
-        # Reset window counters
         bytes_received = 0
         bytes_attempted = 0
         received_packets = 0
@@ -115,3 +114,4 @@ while True:
         jitter_sum = 0.0
         jitter_count = 0
         last_telemetry_time = current_time
+
