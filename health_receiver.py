@@ -20,7 +20,7 @@ from collections import defaultdict
 BASE_DIR           = "/home/ayhm23/health_data/csv"
 TELEMETRY_INTERVAL = 0.25        # flush every 0.25s
 DRAIN_BUDGET       = 0.15        # max time spent draining packets
-STATUS_INTERVAL    = 5.0
+STATUS_INTERVAL    = 15.0        # print progress every 30 seconds
 DEBUG_LOG          = False
 
 os.makedirs(BASE_DIR, exist_ok=True)
@@ -138,6 +138,7 @@ def flush_telemetry(now):
     active_devices_window = set()
 
 # ── Main loop timers ────────────────────────────────────────────────
+start_time = time.time()
 next_flush_time = time.time() + TELEMETRY_INTERVAL
 last_status_time = time.time()
 
@@ -153,27 +154,17 @@ try:
             flush_telemetry(now)
             next_flush_time += TELEMETRY_INTERVAL
 
-        # ── 2. Status print ─────────────────────────────────────────
+        # ── 2. Status print (elapsed time) ──────────────────────────
         if now - last_status_time >= STATUS_INTERVAL:
 
-            active = sorted(device_last_seen.keys())
-
-            silent = [
-                d for d,t in device_last_seen.items()
-                if now - t > 2.0
-            ]
-
-            pps = packets_since_status / (now - last_status_time)
+            elapsed_sec = now - start_time
+            elapsed_min = int(elapsed_sec // 60)
+            elapsed_s = int(elapsed_sec % 60)
 
             packets_since_status = 0
             last_status_time = now
 
-            print(
-                f"[Receiver] rows={telemetry_rows:4d} | "
-                f"active_devices={active} | "
-                f"silent>{2}s={silent} | "
-                f"pkt/s≈{pps:.0f}"
-            )
+            print(f"[Receiver] Elapsed: {elapsed_min}m {elapsed_s}s | Rows: {telemetry_rows:5d} | Status: Running")
 
         # ── 3. Wait briefly for packets ─────────────────────────────
         ready,_,_ = select.select([sock],[],[],0.01)
@@ -263,7 +254,11 @@ finally:
 
     sock.close()
 
+    total_elapsed = time.time() - start_time
+    total_min = int(total_elapsed // 60)
+    total_sec = int(total_elapsed % 60)
+
     print(
-        f"[Receiver] Shutdown. "
-        f"Total telemetry rows written: {telemetry_rows}"
+        f"[Receiver] Shutdown. Total runtime: {total_min}m {total_sec}s | "
+        f"Telemetry rows: {telemetry_rows}"
     )

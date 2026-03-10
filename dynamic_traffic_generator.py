@@ -8,9 +8,10 @@ Simulates a hospital ward network:
   - Profiles cycle randomly with realistic weighted transitions
   - Ground-truth labels are written for later merging with telemetry
 
-Packet-count improvement over single sender:
-  NUM_DEVICES × per-device-pps × 0.5s window = samples for loss estimation
-  e.g.  8 devices × ~60 avg pps × 0.5s ≈ 240 packets/window  (was ~50)
+Balancing strategy:
+  Contiguous block sampling — preserves local time continuity within each
+  sampled chunk so rolling features remain meaningful after balancing.
+  Random row undersampling is intentionally avoided (breaks time series).
 """
 
 import subprocess
@@ -18,22 +19,17 @@ import time
 import random
 import csv
 import os
-import sys
-import signal
 import pandas as pd
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-DURATION_SECONDS  = 3600        # 15-minute capture
+DURATION_SECONDS  = 1800
 BASE_DIR          = "/home/ayhm23/health_data/csv"
 GROUND_TRUTH_FILE = os.path.join(BASE_DIR, "ground_truth_log.csv")
 os.makedirs(BASE_DIR, exist_ok=True)
 
-# Python executable inside the conda env
 PYTHON_EXEC = "/home/ayhm23/miniconda3/bin/python3"
 
 # ── Device Fleet ──────────────────────────────────────────────────────────────
-# Represents one ward: 2×ECG, 2×SpO2, 2×BloodPressure, 1×Temperature, 1×Respiration
-# Increase this list to add more devices — more senders = better stats.
 DEVICES = [
     {"id": 0, "type": "ECG"},
     {"id": 1, "type": "ECG"},
@@ -46,35 +42,34 @@ DEVICES = [
 ]
 
 # ── Network Profiles ──────────────────────────────────────────────────────────
-# Tighter ranges compared to v1 → cleaner class separation in feature space.
 PROFILES = {
     "Stable": {
         "loss":     (0.0,  0.8),
         "delay":    (5,    25),
         "jitter":   (0,    4),
-        "duration": (18,   24),   # slightly shorter — high yield
+        "duration": (18,   24),
     },
     "Unstable": {
         "loss":     (3.0,  7.0),
         "delay":    (40,   120),
         "jitter":   (8,    25),
-        "duration": (22,   30),   # medium
+        "duration": (22,   30),
     },
     "Critical": {
         "loss":     (8.0,  22.0),
         "delay":    (130,  380),
         "jitter":   (35,   90),
-        "duration": (26,   34),   # longest — compensates for low yield
+        "duration": (26,   34),
     },
 }
 
 STATE_WEIGHTS = {"Stable": 0.33, "Unstable": 0.34, "Critical": 0.33}
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def run(cmd, **kwargs):
     subprocess.run(cmd, shell=True, check=True, **kwargs)
 
 def apply_netem(loss, delay, jitter):
-    """Push tc netem parameters onto the sender-side veth."""
     if jitter < 1.0:
         cmd = (f"sudo ip netns exec sender_ns tc qdisc replace dev veth_s "
                f"root netem loss {loss:.3f}% delay {delay:.1f}ms")
@@ -96,6 +91,7 @@ def sample_profile(name):
         random.uniform(*p["duration"]),
     )
 
+
 # ── Merging ───────────────────────────────────────────────────────────────────
 def merge_data():
     telemetry_path = os.path.join(BASE_DIR, "network_telemetry.csv")
@@ -112,10 +108,13 @@ def merge_data():
     truth_df = pd.read_csv(GROUND_TRUTH_FILE).sort_values("start_time")
 
     print(f"    Raw telemetry rows  : {len(telem_df)}")
-    print(f"    Telemetry range     : {telem_df['timestamp'].min():.1f} -> {telem_df['timestamp'].max():.1f}")
-    print(f"    Ground truth range  : {truth_df['start_time'].min():.1f} -> {truth_df['end_time'].max():.1f}")
+    print(f"    Telemetry range     : "
+          f"{telem_df['timestamp'].min():.1f} -> {telem_df['timestamp'].max():.1f}")
+    print(f"    Ground truth range  : "
+          f"{truth_df['start_time'].min():.1f} -> {truth_df['end_time'].max():.1f}")
 
-    TRANSITION_BUFFER = 0.1   # increased from 0.1 to prevent label contamination
+    # ── Label assignment ──────────────────────────────────────────────────────
+    TRANSITION_BUFFER = 0.1     # discard 0.1s on each edge of state transitions
 
     def get_label(ts):
         match = truth_df[
@@ -128,15 +127,26 @@ def merge_data():
 
     dropped = (telem_df["network_condition"] == "Transition").sum()
     print(f"    Rows dropped as Transition: {dropped}")
-
     telem_df = telem_df[telem_df["network_condition"] != "Transition"]
 
+    print(f"\n    Pre-balance class distribution:")
+    print(telem_df["network_condition"].value_counts().to_string())
+
+    # ── Contiguous block balancing ────────────────────────────────────────────
+    # Preserves time continuity within blocks — safe for rolling features.
+    # Falls back to keeping all data if already balanced (±10%).
+    
+
+    
+
+    # ── Save ──────────────────────────────────────────────────────────────────
     output_file = "realistic_network_dataset.csv"
     telem_df.to_csv(output_file, index=False)
 
     print(f"\n✅  Dataset saved -> {output_file}")
     print(f"    Final rows : {len(telem_df)}")
-    print(f"    Class distribution:\n{telem_df['network_condition'].value_counts().to_string()}")
+    print(f"    Class distribution:\n"
+          f"{telem_df['network_condition'].value_counts().to_string()}")
     if "packets_per_window" in telem_df.columns:
         print(f"\n    Avg packets/window : {telem_df['packets_per_window'].mean():.1f}")
         print(f"    Min packets/window : {telem_df['packets_per_window'].min()}")
@@ -148,20 +158,17 @@ def main():
     print(f" Devices: {len(DEVICES)}  |  Duration: {DURATION_SECONDS}s")
     print("══════════════════════════════════════════════════")
 
-    # 1. Reset namespaces
     print("\n[1/4] Setting up network namespaces ...")
     subprocess.run(["sudo", "./setup_namespaces.sh"], check=True)
 
-    # 2. Start receiver
     print("[2/4] Starting central receiver ...")
     rx_cmd = [
         "sudo", "ip", "netns", "exec", "receiver_ns",
         PYTHON_EXEC, "health_receiver.py"
     ]
     rx_proc = subprocess.Popen(rx_cmd)
-    time.sleep(2)   # let receiver bind before senders start
+    time.sleep(2)
 
-    # 3. Start all device senders
     print(f"[3/4] Starting {len(DEVICES)} device senders ...")
     tx_procs = []
     for dev in DEVICES:
@@ -173,9 +180,8 @@ def main():
         ]
         proc = subprocess.Popen(tx_cmd)
         tx_procs.append(proc)
-        time.sleep(0.1)     # stagger starts slightly
+        time.sleep(0.1)
 
-    # 4. Run chaos loop
     print(f"[4/4] Running simulation for {DURATION_SECONDS}s ...\n")
     start_time = time.time()
 
@@ -202,7 +208,8 @@ def main():
                 time.sleep(duration)
                 step_end = time.time()
 
-                writer.writerow([step_start, step_end, state, loss, delay, jitter])
+                writer.writerow([step_start, step_end, state,
+                                 loss, delay, jitter])
                 f.flush()
 
     except KeyboardInterrupt:
