@@ -22,7 +22,7 @@ import os
 import pandas as pd
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-DURATION_SECONDS  = 1800
+DURATION_SECONDS  = 3600*3
 BASE_DIR          = "/home/ayhm23/health_data/csv"
 GROUND_TRUTH_FILE = os.path.join(BASE_DIR, "ground_truth_log.csv")
 os.makedirs(BASE_DIR, exist_ok=True)
