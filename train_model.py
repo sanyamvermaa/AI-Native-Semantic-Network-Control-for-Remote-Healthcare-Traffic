@@ -1,11 +1,12 @@
 """
 train_model.py — Network Health Classifier
 ─────────────────────────────────────────────────────────────────
-Changes from v2:
-  - Added delay_slope and loss_slope (linear gradient over 8 windows)
-    — helps separate Unstable (rising) from Critical (already high)
-  - Added threshold baseline comparison for paper
-  - Baseline shows model improvement over naive rule-based approach
+Changes from v3:
+  - Added interaction features: loss_x_delay, loss_x_jitter
+  - Added XGBoost model with 5-fold CV and held-out evaluation
+  - Added LightGBM model with 5-fold CV and held-out evaluation
+  - Final comparison table across all 3 models
+  - Best model auto-saved as best_network_model.pkl
 """
 import pandas as pd
 import numpy as np
@@ -13,9 +14,24 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import (classification_report, confusion_matrix,
                               f1_score)
+from sklearn.preprocessing import LabelEncoder
 import joblib
 import warnings
 warnings.filterwarnings("ignore")
+
+try:
+    from xgboost import XGBClassifier
+    XGBOOST_AVAILABLE = True
+except ImportError:
+    print("[!] XGBoost not installed. Run: pip install xgboost")
+    XGBOOST_AVAILABLE = False
+
+try:
+    from lightgbm import LGBMClassifier
+    LGBM_AVAILABLE = True
+except ImportError:
+    print("[!] LightGBM not installed. Run: pip install lightgbm")
+    LGBM_AVAILABLE = False
 
 print("── Network Health Classifier Training ──────────────────────────")
 
@@ -50,15 +66,15 @@ df["rolling_delay_mean"]      = df["avg_delay"].rolling(W).mean()
 df["rolling_throughput_mean"] = df["throughput_bps"].rolling(W).mean()
 df["rolling_throughput_std"]  = df["throughput_bps"].rolling(W).std()
 
-# One-step deltas — rising or falling?
+# One-step deltas
 df["loss_delta"]   = df["packet_loss_rate"].diff()
 df["jitter_delta"] = df["jitter"].diff()
 df["delay_delta"]  = df["avg_delay"].diff()
 
-# Acceleration — is degradation speeding up?
-df["loss_accel"]   = df["loss_delta"].diff()
+# Acceleration
+df["loss_accel"] = df["loss_delta"].diff()
 
-# Short vs long trend — is recent worse than the baseline?
+# Short vs long trends
 df["loss_trend_3"]       = (df["packet_loss_rate"].rolling(3).mean()
                             - df["packet_loss_rate"].rolling(8).mean())
 df["throughput_trend_3"] = (df["throughput_bps"].rolling(3).mean()
@@ -66,10 +82,7 @@ df["throughput_trend_3"] = (df["throughput_bps"].rolling(3).mean()
 df["delay_trend_3"]      = (df["avg_delay"].rolling(3).mean()
                             - df["avg_delay"].rolling(8).mean())
 
-# ── Slope features (NEW) ──────────────────────────────────────────────────────
-# Linear gradient over 8 windows — captures sustained rising/falling trends.
-# Critical has already-high loss (flat or variable slope).
-# Unstable has rising loss (positive slope) — this separates them.
+# Slope features
 SLOPE_W = 8
 xs = np.arange(SLOPE_W)
 
@@ -80,40 +93,44 @@ df["loss_slope"] = df["packet_loss_rate"].rolling(SLOPE_W).apply(
     lambda y: np.polyfit(xs, y, 1)[0], raw=True
 )
 
+# ── Interaction features (NEW) ────────────────────────────────────────────────
+# Product of loss × delay gives a single high-signal feature:
+# Critical: high loss * high delay = very large value
+# Stable:   low loss * low delay   = very small value
+# Unstable: medium * medium        = in between
+df["loss_x_delay"]  = df["packet_loss_rate"] * df["avg_delay"]
+df["loss_x_jitter"] = df["packet_loss_rate"] * df["jitter"]
+
 df = df.dropna().reset_index(drop=True)
 print(f"    Rows after NaN drop: {len(df)}")
 
 # ── 4. Feature columns ────────────────────────────────────────────────────────
 FEATURE_COLS = [
-    # Raw telemetry
     "bandwidth_usage_bps",
     "throughput_bps",
     "packet_loss_rate",
     "jitter",
     "avg_delay",
-    # Rolling statistics
     "rolling_loss_mean",
     "rolling_loss_std",
     "rolling_jitter_mean",
     "rolling_delay_mean",
     "rolling_throughput_mean",
     "rolling_throughput_std",
-    # One-step deltas
     "loss_delta",
     "jitter_delta",
     "delay_delta",
-    # Acceleration
     "loss_accel",
-    # Short vs long trends
     "loss_trend_3",
     "throughput_trend_3",
     "delay_trend_3",
-    # Slope features (NEW)
     "delay_slope",
     "loss_slope",
-    # Multi-device diagnostics
     "active_devices",
     "packets_per_window",
+    # Interaction features (NEW)
+    "loss_x_delay",
+    "loss_x_jitter",
 ]
 print(f"    Features ({len(FEATURE_COLS)}): {', '.join(FEATURE_COLS)}\n")
 
@@ -121,117 +138,256 @@ X = df[FEATURE_COLS]
 y = df["network_condition"]
 all_classes = sorted(y.unique())
 
+# Label encoding for XGBoost
+le = LabelEncoder()
+y_enc = le.fit_transform(y)
+
 # ── 5. Time split ─────────────────────────────────────────────────────────────
-split    = int(len(df) * 0.8)
-X_train, X_test = X.iloc[:split], X.iloc[split:]
-y_train, y_test = y.iloc[:split], y.iloc[split:]
+split = int(len(df) * 0.8)
+X_train, X_test   = X.iloc[:split],     X.iloc[split:]
+y_train, y_test   = y.iloc[:split],     y.iloc[split:]
+ye_train, ye_test = y_enc[:split],      y_enc[split:]
 
 # ── 6. Threshold Baseline ─────────────────────────────────────────────────────
-# Simple rule-based classifier using only packet_loss_rate.
-# This is the "naive" approach our model must beat to justify ML.
 print("── Threshold Baseline (rule-based) ─────────────────────────────")
 
 def threshold_predict(loss_rate):
-    if loss_rate > 0.08:    return "Critical"
-    elif loss_rate > 0.03:  return "Unstable"
-    else:                   return "Stable"
+    if loss_rate > 0.08:   return "Critical"
+    elif loss_rate > 0.03: return "Unstable"
+    else:                  return "Stable"
 
 baseline_pred = X_test["packet_loss_rate"].apply(threshold_predict)
-baseline_f1   = f1_score(y_test, baseline_pred,
-                         average="macro", zero_division=0)
+baseline_f1   = f1_score(y_test, baseline_pred, average="macro", zero_division=0)
 baseline_acc  = (baseline_pred == y_test).mean()
 
 print(f"  Rule: loss>8% → Critical | loss>3% → Unstable | else → Stable")
 print(classification_report(y_test, baseline_pred,
                              labels=all_classes, zero_division=0))
 print(f"  Baseline macro F1 : {baseline_f1:.3f}")
-print(f"  Baseline accuracy : {baseline_acc:.3f}")
+print(f"  Baseline accuracy : {baseline_acc:.3f}\n")
 
-# ── 7. TimeSeriesSplit Cross-Validation ───────────────────────────────────────
-print("── TimeSeriesSplit Cross-Validation (5 folds) ───────────────────")
-tscv   = TimeSeriesSplit(n_splits=5)
-scores = []
+# ── Helper: run CV for any model ──────────────────────────────────────────────
+def run_cv(model_fn, X, y, n_splits=5, use_encoded=False):
+    """Run TimeSeriesSplit CV. model_fn() returns a fresh unfitted model."""
+    tscv   = TimeSeriesSplit(n_splits=n_splits)
+    scores = []
+    for fold, (tr, te) in enumerate(tscv.split(X)):
+        X_tr, X_te = X.iloc[tr], X.iloc[te]
+        y_tr, y_te = y[tr], y[te]
+        clf = model_fn()
+        clf.fit(X_tr, y_tr)
+        pred = clf.predict(X_te)
+        if use_encoded:
+            pred_labels = le.inverse_transform(pred)
+            true_labels = le.inverse_transform(y_te)
+        else:
+            pred_labels = pred
+            true_labels = y_te
+        macro_f1  = f1_score(true_labels, pred_labels,
+                             average="macro", zero_division=0)
+        per_class = f1_score(true_labels, pred_labels,
+                             average=None, labels=all_classes, zero_division=0)
+        scores.append(macro_f1)
+        class_str = "  ".join(
+            f"{c[:3]}={v:.2f}" for c, v in zip(all_classes, per_class)
+        )
+        print(f"  Fold {fold+1}  macro F1={macro_f1:.3f}   [{class_str}]"
+              f"   train={len(tr)}  test={len(te)}")
+    return np.mean(scores), np.std(scores)
 
-for fold, (train_idx, test_idx) in enumerate(tscv.split(X)):
-    X_tr, X_te = X.iloc[train_idx], X.iloc[test_idx]
-    y_tr, y_te = y.iloc[train_idx], y.iloc[test_idx]
-
-    clf = RandomForestClassifier(
-        n_estimators=100, random_state=42,
-        n_jobs=-1, class_weight="balanced"
-    )
-    clf.fit(X_tr, y_tr)
-    y_pred = clf.predict(X_te)
-
-    macro_f1  = f1_score(y_te, y_pred, average="macro", zero_division=0)
-    per_class = f1_score(y_te, y_pred, average=None,
-                         labels=all_classes, zero_division=0)
-    scores.append(macro_f1)
-
-    class_str = "  ".join(
-        f"{c[:3]}={v:.2f}" for c, v in zip(all_classes, per_class)
-    )
-    print(f"  Fold {fold+1}  macro F1={macro_f1:.3f}   [{class_str}]"
-          f"   train={len(train_idx)}  test={len(test_idx)}")
-
-mean_f1 = np.mean(scores)
-std_f1  = np.std(scores)
-print(f"\n  CV Result : {mean_f1:.3f} ± {std_f1:.3f}  macro F1")
-print(f"  Baseline  : {baseline_f1:.3f}  macro F1")
-print(f"  Improvement over baseline: +{mean_f1 - baseline_f1:.3f}")
-
-if mean_f1 >= 0.85:
-    print("  ✅ Strong generalisation")
-elif mean_f1 >= 0.75:
-    print("  ⚠️  Acceptable — consider more data or wider profile overlap")
-else:
-    print("  ❌ Weak — boundaries too soft or dataset too small")
-
-# ── 8. Final held-out evaluation ──────────────────────────────────────────────
-print("\n── Final Held-Out Test (last 20% of timeline) ───────────────────")
+# ── Helper: evaluate on held-out test ────────────────────────────────────────
+def run_held_out(model, X_tr, y_tr, X_te, y_te,
+                 use_encoded=False, present_classes=None):
+    model.fit(X_tr, y_tr)
+    pred = model.predict(X_te)
+    if use_encoded:
+        pred = le.inverse_transform(pred)
+        y_te = le.inverse_transform(y_te)
+    if present_classes is None:
+        present_classes = all_classes
+    print(classification_report(y_te, pred,
+                                 labels=present_classes, zero_division=0))
+    print("Confusion Matrix:")
+    print(confusion_matrix(y_te, pred, labels=present_classes))
+    print(f"Labels: {list(present_classes)}")
+    f1 = f1_score(y_te, pred, average="macro", zero_division=0)
+    return f1, model
 
 present_classes = sorted(y_test.unique())
-missing_cls = set(all_classes) - set(present_classes)
-if missing_cls:
-    print(f"  ⚠️  Classes absent in test window: {missing_cls}")
-    print(f"      CV above is the reliable metric\n")
 
-final_model = RandomForestClassifier(
+# ═══════════════════════════════════════════════════════════════════════════════
+# ── MODEL 1: RandomForest (existing, unchanged) ───────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+print("── [1/3] RandomForest — CV (5 folds) ───────────────────────────")
+
+rf_mean, rf_std = run_cv(
+    lambda: RandomForestClassifier(
+        n_estimators=100, random_state=42,
+        n_jobs=-1, class_weight="balanced"
+    ),
+    X, y.values
+)
+print(f"\n  CV Result : {rf_mean:.3f} ± {rf_std:.3f}  macro F1")
+print(f"  Baseline  : {baseline_f1:.3f}  macro F1")
+print(f"  Improvement over baseline: +{rf_mean - baseline_f1:.3f}")
+
+print("\n── [1/3] RandomForest — Held-Out Test ──────────────────────────")
+rf_held_model = RandomForestClassifier(
     n_estimators=100, random_state=42,
     n_jobs=-1, class_weight="balanced"
 )
-final_model.fit(X_train, y_train)
-y_pred = final_model.predict(X_test)
+rf_f1, rf_held_model = run_held_out(
+    rf_held_model, X_train, y_train, X_test, y_test,
+    present_classes=present_classes
+)
+print(f"\n  Held-out macro F1 : {rf_f1:.3f}")
 
-print(classification_report(y_test, y_pred,
-                             labels=present_classes, zero_division=0))
-print("Confusion Matrix:")
-print(confusion_matrix(y_test, y_pred, labels=present_classes))
-print(f"Labels: {present_classes}")
-
-held_out_f1 = f1_score(y_test, y_pred, average="macro", zero_division=0)
-print(f"\n  Held-out macro F1 : {held_out_f1:.3f}")
-print(f"  Baseline macro F1 : {baseline_f1:.3f}")
-print(f"  Model improvement : +{held_out_f1 - baseline_f1:.3f}")
-
-# ── 9. Feature importances ────────────────────────────────────────────────────
-print("\n── Feature Importances (full dataset) ───────────────────────────")
-full_model = RandomForestClassifier(
+# Feature importances (RF only)
+print("\n── Feature Importances (RandomForest, full dataset) ─────────────")
+full_rf = RandomForestClassifier(
     n_estimators=100, random_state=42,
     n_jobs=-1, class_weight="balanced"
 )
-full_model.fit(X, y)
-imp = (pd.Series(full_model.feature_importances_, index=FEATURE_COLS)
+full_rf.fit(X, y)
+imp = (pd.Series(full_rf.feature_importances_, index=FEATURE_COLS)
          .sort_values(ascending=False))
 for feat, val in imp.items():
     bar = "█" * int(val * 80)
     print(f"  {feat:<30} {val:.4f}  {bar}")
 
-# ── 10. Save ──────────────────────────────────────────────────────────────────
-model_filename = "robust_network_model.pkl"
-joblib.dump(full_model, model_filename)
-print(f"\n[✓] Model saved → '{model_filename}'  (trained on all {len(X)} samples)")
-print(f"    CV macro F1       : {mean_f1:.3f} ± {std_f1:.3f}")
-print(f"    Held-out macro F1 : {held_out_f1:.3f}")
-print(f"    Baseline macro F1 : {baseline_f1:.3f}")
-print(f"    Improvement       : +{mean_f1 - baseline_f1:.3f} over threshold rule")
+joblib.dump(full_rf, "robust_network_model.pkl")
+print(f"\n[✓] RandomForest saved → 'robust_network_model.pkl'")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ── MODEL 2: XGBoost (NEW) ────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+xgb_mean, xgb_std, xgb_f1 = 0.0, 0.0, 0.0
+xgb_held_model = None
+
+if XGBOOST_AVAILABLE:
+    print("\n── [2/3] XGBoost — CV (5 folds) ────────────────────────────────")
+    xgb_mean, xgb_std = run_cv(
+        lambda: XGBClassifier(
+            n_estimators=500,
+            max_depth=6,
+            learning_rate=0.05,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            use_label_encoder=False,
+            eval_metric="mlogloss",
+            random_state=42,
+            n_jobs=-1
+        ),
+        X, y_enc, use_encoded=True
+    )
+    print(f"\n  CV Result : {xgb_mean:.3f} ± {xgb_std:.3f}  macro F1")
+    print(f"  Baseline  : {baseline_f1:.3f}  macro F1")
+    print(f"  Improvement over baseline: +{xgb_mean - baseline_f1:.3f}")
+
+    print("\n── [2/3] XGBoost — Held-Out Test ───────────────────────────────")
+    xgb_held_model = XGBClassifier(
+        n_estimators=500,
+        max_depth=6,
+        learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        use_label_encoder=False,
+        eval_metric="mlogloss",
+        random_state=42,
+        n_jobs=-1
+    )
+    xgb_f1, xgb_held_model = run_held_out(
+        xgb_held_model, X_train, ye_train, X_test, ye_test,
+        use_encoded=True, present_classes=present_classes
+    )
+    print(f"\n  Held-out macro F1 : {xgb_f1:.3f}")
+
+    full_xgb = XGBClassifier(
+        n_estimators=500, max_depth=6, learning_rate=0.05,
+        subsample=0.8, colsample_bytree=0.8,
+        use_label_encoder=False, eval_metric="mlogloss",
+        random_state=42, n_jobs=-1
+    )
+    full_xgb.fit(X, y_enc)
+    joblib.dump(full_xgb, "xgboost_network_model.pkl")
+    print(f"[✓] XGBoost saved → 'xgboost_network_model.pkl'")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ── MODEL 3: LightGBM (NEW) ───────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+lgbm_mean, lgbm_std, lgbm_f1 = 0.0, 0.0, 0.0
+lgbm_held_model = None
+
+if LGBM_AVAILABLE:
+    print("\n── [3/3] LightGBM — CV (5 folds) ───────────────────────────────")
+    lgbm_mean, lgbm_std = run_cv(
+        lambda: LGBMClassifier(
+            n_estimators=500,
+            max_depth=6,
+            learning_rate=0.05,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            class_weight="balanced",
+            random_state=42,
+            n_jobs=-1,
+            verbose=-1
+        ),
+        X, y.values
+    )
+    print(f"\n  CV Result : {lgbm_mean:.3f} ± {lgbm_std:.3f}  macro F1")
+    print(f"  Baseline  : {baseline_f1:.3f}  macro F1")
+    print(f"  Improvement over baseline: +{lgbm_mean - baseline_f1:.3f}")
+
+    print("\n── [3/3] LightGBM — Held-Out Test ──────────────────────────────")
+    lgbm_held_model = LGBMClassifier(
+        n_estimators=500, max_depth=6, learning_rate=0.05,
+        subsample=0.8, colsample_bytree=0.8,
+        class_weight="balanced", random_state=42,
+        n_jobs=-1, verbose=-1
+    )
+    lgbm_f1, lgbm_held_model = run_held_out(
+        lgbm_held_model, X_train, y_train, X_test, y_test,
+        present_classes=present_classes
+    )
+    print(f"\n  Held-out macro F1 : {lgbm_f1:.3f}")
+
+    full_lgbm = LGBMClassifier(
+        n_estimators=500, max_depth=6, learning_rate=0.05,
+        subsample=0.8, colsample_bytree=0.8,
+        class_weight="balanced", random_state=42,
+        n_jobs=-1, verbose=-1
+    )
+    full_lgbm.fit(X, y)
+    joblib.dump(full_lgbm, "lgbm_network_model.pkl")
+    print(f"[✓] LightGBM saved → 'lgbm_network_model.pkl'")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ── Final Comparison Table ────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+print("\n── Model Comparison ─────────────────────────────────────────────")
+print(f"  {'Model':<16} {'CV F1 ± std':<18} {'Held-out F1':<14} {'vs Baseline'}")
+print(f"  {'-'*62}")
+print(f"  {'RandomForest':<16} {rf_mean:.3f} ± {rf_std:.3f}{'':>6} "
+      f"{rf_f1:.3f}{'':>8} +{rf_f1 - baseline_f1:.3f}")
+
+if XGBOOST_AVAILABLE:
+    print(f"  {'XGBoost':<16} {xgb_mean:.3f} ± {xgb_std:.3f}{'':>6} "
+          f"{xgb_f1:.3f}{'':>8} +{xgb_f1 - baseline_f1:.3f}")
+
+if LGBM_AVAILABLE:
+    print(f"  {'LightGBM':<16} {lgbm_mean:.3f} ± {lgbm_std:.3f}{'':>6} "
+          f"{lgbm_f1:.3f}{'':>8} +{lgbm_f1 - baseline_f1:.3f}")
+
+# ── Save best model ───────────────────────────────────────────────────────────
+scores_map = {"RandomForest": (rf_f1, full_rf)}
+if XGBOOST_AVAILABLE:
+    scores_map["XGBoost"] = (xgb_f1, full_xgb)
+if LGBM_AVAILABLE:
+    scores_map["LightGBM"] = (lgbm_f1, full_lgbm)
+
+best_name = max(scores_map, key=lambda k: scores_map[k][0])
+best_f1, best_model_obj = scores_map[best_name]
+
+joblib.dump(best_model_obj, "best_network_model.pkl")
+print(f"\n🏆 Best model: {best_name} (held-out F1={best_f1:.3f})")
+print(f"   Saved → 'best_network_model.pkl'")
