@@ -2,7 +2,13 @@
 
 ## Quick Resume
 If starting a new session, read this file fully before doing anything.
-The project is **complete up to model tuning**. Next logical step is **real-time inference integration**.
+The project now includes a **working closed-loop control system** with:
+- Real-time network inference in receiver
+- 9-case Network × Health decision policy
+- Debounced command issuance
+- Fleet-wide adaptation via centralized ward controller
+
+Model tuning is complete, and **closed-loop integration + stress testing are implemented and validated**.
 
 ---
 
@@ -33,7 +39,11 @@ https://github.com/sanyamvermaa/AI-Native-Semantic-Network-Control-for-Remote-He
 | `tune_xgboost.py` | 40-iter RandomizedSearchCV on XGBoost, saves tuned model |
 | `health_receiver.py` | Receives UDP packets, aggregates into telemetry windows |
 | `health_sender.py` | Simulates 8 IoT medical devices sending UDP packets |
+| `ward_controller.py` | Central command listener in `sender_ns`; fans one receiver command to full sender fleet via shared state |
 | `setup_namespaces.sh` | Creates sender_ns and receiver_ns Linux network namespaces |
+| `scripts/run_closed_loop_multi_sender_test.sh` | Runs receiver + ward controller + 8 senders and summarizes behavior |
+| `scripts/run_closed_loop_stress_auto.sh` | Namespace stress run with automatic Stable→Unstable→Critical netem cycling |
+| `scripts/stress_console.sh` | Interactive/manual tc netem control during live closed-loop runs |
 | `realistic_network_dataset.csv` | Generated dataset (42,495 rows) — NOT in git |
 | `robust_network_model.pkl` | RandomForest model — NOT in git (>100MB) |
 | `xgboost_network_model.pkl` | XGBoost default params model — NOT in git |
@@ -56,14 +66,73 @@ https://github.com/sanyamvermaa/AI-Native-Semantic-Network-Control-for-Remote-He
   - Temperature x1     loss/delay/
   - Respiration x1     jitter
         │
-        └── dynamic_traffic_generator.py
-              - Controls tc netem per profile
-              - Writes ground_truth_log.csv
-              - Merges both CSVs → realistic_network_dataset.csv
+      ├── ward_controller.py
+      │     - Listens once on UDP:5006 for receiver commands
+      │     - Writes shared `ward_mode_state.json`
+      │     - All sender processes pull mode from shared state
+      │
+      └── dynamic_traffic_generator.py
+          - Controls tc netem per profile
+          - Writes ground_truth_log.csv
+          - Merges both CSVs → realistic_network_dataset.csv
 ```
 
 **Telemetry output:** `/home/ayhm23/health_data/csv/network_telemetry.csv`
 **Ground truth output:** `/home/ayhm23/health_data/csv/ground_truth_log.csv`
+**Closed-loop command log:** `<project>/csv/command_log.csv`
+**Ward state file:** `<project>/csv/ward_mode_state.json`
+
+---
+
+## Closed-Loop Implementation Status (March 2026)
+
+### Receiver (`health_receiver.py`) implemented
+- Model loading from `best_network_model.pkl` with graceful degradation if unavailable.
+- Real-time feature extraction with exact 24 training features in exact order (DataFrame input).
+- Rolling windows/slope features (`W=10`, slope window `8`) and inference warm-up skip.
+- Health state integration from incoming packet labels with carry-forward on empty windows.
+- Exact 9-case decision table (Network × Health → Command).
+- Debounce logic: first command immediate, then 5 consecutive windows required for command change.
+- Dedicated command-channel UDP send path (receiver → ward controller, port `5006`).
+- Latency logging per command and periodic 60s average reporting.
+- Command CSV logging and end-of-run summary.
+
+### Sender (`health_sender.py`) implemented
+- Adaptive mode-based payload shaping + rate control:
+    - `FULL_ECG`, `FULL_ECG_PRIORITY`, `DOWNSAMPLED_ECG`,
+        `SEMANTIC_ALERT`, `SEMANTIC_CRITICAL`, `SEMANTIC_SUMMARY`
+- Clinical burst generation retained.
+- Sender now follows centralized fleet mode from `ward_mode_state.json`.
+- Per-sender logs include `[CMD RECEIVED]` and `[MODE CHANGE]` lines.
+
+### Ward Controller (`ward_controller.py`) implemented
+- Single process in `sender_ns` listens on UDP `5006`.
+- Receives one command stream from receiver.
+- Publishes latest command atomically to shared state file.
+- Logs command intake to CSV.
+- Enables synchronized adaptation across all 8 sender processes.
+
+### Launch + Stress tooling implemented
+- `scripts/run_closed_loop_multi_sender_test.sh`: baseline fleet run with summary.
+- `scripts/run_closed_loop_stress_auto.sh`: automatic stress timeline with namespace setup.
+- `scripts/stress_console.sh`: interactive/manual stress control (preset/custom).
+
+---
+
+## Validation Highlights
+
+### Prior issue discovered and fixed
+- Original per-sender UDP command listener design delivered commands to only one process due to shared port contention.
+- Replaced with centralized ward controller architecture; all senders now receive synchronized mode updates.
+
+### Representative validated stress run
+- Run: `stress_auto_20260312_154045`
+- Receiver predictions: `62`
+- Ward commands received: `3`
+- Sender mode changes: `16`
+- Command CSV sends: `3`
+- Average response latency: `~519 ms`
+- Command fan-out verification: all 8 sender logs showed `CMD RECEIVED` events.
 
 ---
 
@@ -204,16 +273,16 @@ XGBClassifier(
 ## What's Left To Do
 
 ### High Priority
-1. **Real-time inference in `health_receiver.py`** — load `best_network_model.pkl`, classify each incoming telemetry window live, print/log the prediction
-2. **Control action layer** — when model predicts Critical, trigger something: QoS reprioritisation, alert log, bandwidth reservation
+1. **Semantic command stability tuning** — if needed, tune debounce/hold policy so `SEMANTIC_*` commands trigger more consistently under rapid flicker.
+2. **Fleet-level analytics dashboard** — real-time view of predicted state, command, and sender mode distribution.
 
 ### Medium Priority
-3. **Tighten Critical profile** — raise delay floor from 130ms → 200ms to reduce Critical→Stable confusion at boundary
-4. **Detection latency test** — how many windows does the model need to confidently detect Stable→Critical transition?
+3. **Tighten Critical profile** — raise delay floor from 130ms → 200ms to reduce Critical→Stable confusion at boundary.
+4. **Detection latency characterization** — quantify windows-to-detect for Stable→Critical transitions under varied burst patterns.
 
 ### Low Priority
-5. **Stacking ensemble** — use XGBoost + LightGBM predictions as meta-features for a final RF classifier
-6. **More data** — push past 50,000 rows for more robust CV
+5. **Stacking ensemble** — use XGBoost + LightGBM predictions as meta-features for a final RF classifier.
+6. **More data** — push past 50,000 rows for more robust CV.
 
 ---
 
@@ -238,3 +307,6 @@ cp xgboost_tuned_model.pkl best_network_model.pkl
 
 ## Report
 A full Word document report (`project_report.docx`) was generated documenting all of the above. It covers architecture, dataset, features, all model stages, per-class results, challenges, and next steps.
+
+Latest implementation report artifact:
+- `outputs/reports/closed_loop_implementation_report.docx` (closed-loop integration, ward-controller architecture, stress validation summary)
