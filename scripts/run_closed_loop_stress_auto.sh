@@ -28,6 +28,7 @@ mkdir -p "${RUN_DIR}" "${DATA_DIR}"
 
 RECEIVER_LOG="${RUN_DIR}/receiver.log"
 WARD_LOG="${RUN_DIR}/ward_controller.log"
+DASHBOARD_LOG="${RUN_DIR}/dashboard.log"
 SENDER_PID_FILE="${RUN_DIR}/sender_pids.txt"
 STRESS_LOG="${RUN_DIR}/stress.log"
 
@@ -43,9 +44,9 @@ unstable_loss=(3.0 7.0)
 unstable_delay=(40 120)
 unstable_jitter=(8 25)
 
-critical_loss=(8.0 22.0)
-critical_delay=(130 380)
-critical_jitter=(35 90)
+critical_loss=(12.0 22.0)
+critical_delay=(180 380)
+critical_jitter=(50 90)
 
 rand_float() {
     local min="$1"
@@ -120,6 +121,10 @@ cleanup() {
         kill "${WARD_PID}" 2>/dev/null || true
     fi
 
+    if [[ -n "${DASHBOARD_PID:-}" ]] && kill -0 "${DASHBOARD_PID}" 2>/dev/null; then
+        kill "${DASHBOARD_PID}" 2>/dev/null || true
+    fi
+
     sudo ip netns exec sender_ns tc qdisc del dev veth_s root 2>/dev/null || true
 }
 
@@ -148,6 +153,11 @@ sudo env HEALTH_DATA_BASE_DIR="${DATA_DIR}" ip netns exec sender_ns "${PYTHON_BI
 WARD_PID=$!
 
 sleep 1
+
+echo "[RUN] Starting dashboard..."
+HEALTH_DATA_BASE_DIR="${DATA_DIR}" "${PYTHON_BIN}" -u dashboard.py > "${DASHBOARD_LOG}" 2>&1 &
+DASHBOARD_PID=$!
+echo "[RUN] Dashboard at http://localhost:5050"
 
 declare -a DEVICES=(
     "0 ECG"

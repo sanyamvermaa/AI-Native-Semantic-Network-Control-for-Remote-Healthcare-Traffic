@@ -24,7 +24,7 @@ from sklearn.preprocessing import LabelEncoder
 
 # ── Config ─────────────────────────────────────────────────────────
 BASE_DIR           = os.environ.get("HEALTH_DATA_BASE_DIR", "/home/ayhm23/health_data/csv")
-TELEMETRY_INTERVAL = 0.50        # flush every 0.5s
+TELEMETRY_INTERVAL = 0.25        # flush every 0.25s
 DRAIN_BUDGET       = 0.15        # max time spent draining packets
 STATUS_INTERVAL    = 15.0        # print progress every 30 seconds
 DEBUG_LOG          = False
@@ -346,10 +346,12 @@ def flush_telemetry(now, window_start):
                     pending_command = command
                     pending_count = 1
 
+                required_windows = 2 if network_state == "Critical" else DEBOUNCE_WINDOWS
+
                 should_send = False
                 if last_sent_command is None:
                     should_send = True
-                elif command != last_sent_command and pending_count >= DEBOUNCE_WINDOWS:
+                elif command != last_sent_command and pending_count >= required_windows:
                     should_send = True
 
                 if should_send and last_sender_ip is not None:

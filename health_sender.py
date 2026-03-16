@@ -14,6 +14,7 @@ import csv
 import os
 import argparse
 import json
+import math
 from collections import deque
 
 # ── Device Profiles ───────────────────────────────────────────────────────────
@@ -169,6 +170,122 @@ seq_num        = 0
 # ── CLOSED LOOP ADDITION ─────────────────────────────────────
 recent_hr = deque()
 
+VITAL_MODEL = {
+    "ECG": {
+        "baseline": 74.0,
+        "hard_bounds": (45.0, 185.0),
+        "roc_per_sec": 4.2,
+        "noise_sigma": 0.20,
+        "display": lambda x: int(round(x)),
+    },
+    "SpO2": {
+        "baseline": 98.0,
+        "hard_bounds": (82.0, 100.0),
+        "roc_per_sec": 1.0,
+        "noise_sigma": 0.05,
+        "display": lambda x: int(round(x)),
+    },
+    "BloodPressure": {
+        "baseline": 118.0,
+        "hard_bounds": (85.0, 210.0),
+        "roc_per_sec": 3.0,
+        "noise_sigma": 0.25,
+        "display": lambda x: int(round(x)),
+    },
+    "Temperature": {
+        "baseline": 367.0,
+        "hard_bounds": (350.0, 405.0),
+        "roc_per_sec": 0.5,
+        "noise_sigma": 0.04,
+        "display": lambda x: int(round(x)),
+    },
+    "Respiration": {
+        "baseline": 15.0,
+        "hard_bounds": (8.0, 45.0),
+        "roc_per_sec": 1.2,
+        "noise_sigma": 0.06,
+        "display": lambda x: int(round(x)),
+    },
+}
+
+
+def _clamp(value, lo, hi):
+    return max(lo, min(hi, value))
+
+
+def _stress_from_state(mode, meta, now_ts):
+    net_state = str(meta.get("network_state", "Stable"))
+    health_state = str(meta.get("health_state", "NORMAL"))
+
+    net_map = {"Stable": 0.20, "Unstable": 0.55, "Critical": 0.90}
+    health_map = {"NORMAL": 0.0, "ALERT": 0.15, "CRITICAL": 0.30}
+    mode_map = {
+        "FULL_ECG": 0.00,
+        "FULL_ECG_PRIORITY": 0.08,
+        "DOWNSAMPLED_ECG": 0.10,
+        "SEMANTIC_ALERT": 0.18,
+        "SEMANTIC_CRITICAL": 0.25,
+        "SEMANTIC_SUMMARY": 0.12,
+    }
+
+    base = net_map.get(net_state, 0.35)
+    health_boost = health_map.get(health_state.upper(), 0.10)
+    mode_boost = mode_map.get(mode, 0.0)
+    drift = 0.08 * math.sin(now_ts / 28.0)
+
+    return _clamp(base + health_boost + mode_boost + drift, 0.0, 1.20)
+
+
+def _target_from_stress(device_type, stress, now_ts, device_bias):
+    hr_proxy = 72.0 + 42.0 * stress + 2.2 * math.sin(now_ts / 9.0 + 0.7)
+    rr_proxy = 14.0 + 10.0 * stress + 1.2 * math.sin(now_ts / 11.0 + 0.4)
+
+    if device_type == "ECG":
+        return hr_proxy + device_bias
+    if device_type == "SpO2":
+        return 98.5 - 4.6 * stress - 0.22 * max(0.0, rr_proxy - 20.0) + 0.15 * device_bias
+    if device_type == "BloodPressure":
+        return 116.0 + 45.0 * stress + 0.20 * (hr_proxy - 70.0) + device_bias
+    if device_type == "Temperature":
+        return 366.5 + 8.0 * stress + 0.03 * (hr_proxy - 70.0) + 0.3 * device_bias
+    if device_type == "Respiration":
+        return rr_proxy + 0.035 * (hr_proxy - 70.0) + 0.2 * device_bias
+    return hr_proxy
+
+
+def _label_from_value(device_type, value):
+    if device_type == "ECG":
+        if value >= 135 or value <= 48:
+            return "CRITICAL"
+        if value >= 110 or value <= 56:
+            return "ALERT"
+        return "NORMAL"
+    if device_type == "SpO2":
+        if value <= 89:
+            return "CRITICAL"
+        if value <= 94:
+            return "ALERT"
+        return "NORMAL"
+    if device_type == "BloodPressure":
+        if value >= 185 or value <= 88:
+            return "CRITICAL"
+        if value >= 150 or value <= 100:
+            return "ALERT"
+        return "NORMAL"
+    if device_type == "Temperature":
+        if value >= 390 or value <= 355:
+            return "CRITICAL"
+        if value >= 378 or value <= 360:
+            return "ALERT"
+        return "NORMAL"
+    if device_type == "Respiration":
+        if value >= 33 or value <= 9:
+            return "CRITICAL"
+        if value >= 24 or value <= 11:
+            return "ALERT"
+        return "NORMAL"
+    return "NORMAL"
+
 def update_recent_hr(ts, hr_value):
     recent_hr.append((ts, hr_value))
     cutoff = ts - 10.0
@@ -178,6 +295,14 @@ def update_recent_hr(ts, hr_value):
 def get_current_mode():
     return current_mode, dict(last_command_meta)
 
+
+model_cfg = VITAL_MODEL[args.device_type]
+device_rng = random.Random(1009 + args.device_id * 37)
+device_bias = device_rng.uniform(-1.2, 1.2)
+phys_value = model_cfg["baseline"] + device_bias
+last_loop_ts = time.time()
+burst_strength = 0.0
+
 while True:
     now = time.time()
 
@@ -185,34 +310,43 @@ while True:
     # Pull latest fleet mode from centralized ward controller state.
     refresh_mode_from_ward_controller(now)
 
-    # Randomly trigger a clinical burst/alarm episode
-    if not burst_mode and random.random() < profile["burst_prob"]:
-        burst_mode     = True
+    mode, mode_meta = get_current_mode()
+
+    dt = _clamp(now - last_loop_ts, 0.01, 1.5)
+    last_loop_ts = now
+
+    stress = _stress_from_state(mode, mode_meta, now)
+
+    # Bursts now raise stress smoothly instead of forcing abrupt random spikes.
+    burst_trigger_prob = profile["burst_prob"] * (1.0 + 0.8 * stress)
+    if not burst_mode and random.random() < burst_trigger_prob:
+        burst_mode = True
         burst_end_time = now + profile["burst_dur"]
+        burst_strength = _clamp(0.25 + 0.35 * stress, 0.20, 0.65)
+
+    if burst_mode and now >= burst_end_time:
+        burst_mode = False
 
     if burst_mode:
-        value = random.randint(*profile["burst"])
-        if now > burst_end_time:
-            burst_mode = False
-    else:
-        value = random.randint(*profile["normal"])
+        stress = _clamp(stress + burst_strength, 0.0, 1.30)
 
-    # Clinical label (patient health, not network health)
-    low, high = profile["normal"]
-    if burst_mode:
-        label = "CRITICAL"
-    elif value > high * 0.95:
-        label = "ALERT"
-    else:
-        label = "NORMAL"
+    target = _target_from_stress(args.device_type, stress, now, device_bias)
+
+    lo, hi = model_cfg["hard_bounds"]
+    max_step = model_cfg["roc_per_sec"] * dt
+    delta = _clamp(target - phys_value, -max_step, max_step)
+    noise = random.gauss(0.0, model_cfg["noise_sigma"] * math.sqrt(dt))
+    phys_value = _clamp(phys_value + delta + noise, lo, hi)
+
+    value = model_cfg["display"](phys_value)
+    label = _label_from_value(args.device_type, value)
 
     seq_num += 1
 
     # ── CLOSED LOOP ADDITION ─────────────────────────────────────
+    # Keep backward-compatible key names expected by downstream receiver logic.
     hr_value = int(value)
     update_recent_hr(now, hr_value)
-
-    mode, _ = get_current_mode()
 
     packet = {
         "device_id": args.device_id,
@@ -226,7 +360,8 @@ while True:
     if mode in ("FULL_ECG", "FULL_ECG_PRIORITY"):
         packet["heart_rate"] = hr_value
         packet["raw_ecg_snippet"] = [
-            max(0, hr_value + random.randint(-3, 3)) for _ in range(10)
+            max(0, int(round(hr_value + 2.2 * math.sin((now * 9.0) + i * 0.45) + random.gauss(0, 0.6))))
+            for i in range(10)
         ]
     elif mode == "DOWNSAMPLED_ECG":
         packet["heart_rate"] = hr_value
@@ -249,7 +384,8 @@ while True:
         mode = "FULL_ECG"
         packet["mode"] = mode
         packet["raw_ecg_snippet"] = [
-            max(0, hr_value + random.randint(-3, 3)) for _ in range(10)
+            max(0, int(round(hr_value + 2.2 * math.sin((now * 9.0) + i * 0.45) + random.gauss(0, 0.6))))
+            for i in range(10)
         ]
 
     payload = json.dumps(packet, separators=(",", ":"))
