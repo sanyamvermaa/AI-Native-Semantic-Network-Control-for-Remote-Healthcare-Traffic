@@ -12,8 +12,9 @@ scenarios = [
 ]
 
 telemetry_files = []
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS_DIR = PROJECT_ROOT / "scripts"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SETUP_SCRIPT = PROJECT_ROOT / "scripts" / "setup_namespaces.sh"
+DATASET_SCRIPTS_DIR = PROJECT_ROOT / "scripts" / "dataset_generation"
 DATASETS_DIR = PROJECT_ROOT / "data" / "datasets"
 LOGS_DIR = PROJECT_ROOT / "data" / "logs"
 
@@ -24,13 +25,13 @@ LOGS_DIR.mkdir(parents=True, exist_ok=True)
 print("Starting Data Generation Pipeline...")
 
 # 1. Setup Namespaces (Run once)
-subprocess.run(["sudo", str(SCRIPTS_DIR / "setup_namespaces.sh")], check=True)
+subprocess.run(["sudo", str(SETUP_SCRIPT)], check=True)
 
 for loss, delay, duration, label in scenarios:
     print(f"\n--- Running Scenario: {label} (Loss={loss}%, Delay={delay}ms) ---")
     
     # Run the experiment script
-    subprocess.run(["sudo", str(SCRIPTS_DIR / "run_experiment.sh"), str(loss), str(delay), str(duration)], check=True)
+    subprocess.run(["sudo", str(DATASET_SCRIPTS_DIR / "run_experiment.sh"), str(loss), str(delay), str(duration)], check=True)
     
     # Load the generated telemetry
     telemetry_path = os.path.join(BASE_DIR, "network_telemetry.csv")

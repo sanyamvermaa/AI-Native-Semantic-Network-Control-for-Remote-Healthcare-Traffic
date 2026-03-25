@@ -25,8 +25,9 @@ import pandas as pd
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 DURATION_SECONDS  = 3600*3
-PROJECT_ROOT      = Path(__file__).resolve().parents[1]
-SCRIPTS_DIR       = PROJECT_ROOT / "scripts"
+PROJECT_ROOT      = Path(__file__).resolve().parents[2]
+SETUP_SCRIPT      = PROJECT_ROOT / "scripts" / "setup_namespaces.sh"
+DATASET_SCRIPTS_DIR = PROJECT_ROOT / "scripts" / "dataset_generation"
 DATASETS_DIR      = PROJECT_ROOT / "data" / "datasets"
 LOGS_DIR          = PROJECT_ROOT / "data" / "logs"
 
@@ -167,12 +168,12 @@ def main():
     print("══════════════════════════════════════════════════")
 
     print("\n[1/4] Setting up network namespaces ...")
-    subprocess.run(["sudo", str(SCRIPTS_DIR / "setup_namespaces.sh")], check=True)
+    subprocess.run(["sudo", str(SETUP_SCRIPT)], check=True)
 
     print("[2/4] Starting central receiver ...")
     rx_cmd = [
         "sudo", "ip", "netns", "exec", "receiver_ns",
-        PYTHON_EXEC, str(SCRIPTS_DIR / "health_receiver.py")
+        PYTHON_EXEC, str(DATASET_SCRIPTS_DIR / "health_receiver.py")
     ]
     rx_proc = subprocess.Popen(rx_cmd)
     time.sleep(2)
@@ -182,7 +183,7 @@ def main():
     for dev in DEVICES:
         tx_cmd = [
             "sudo", "ip", "netns", "exec", "sender_ns",
-            PYTHON_EXEC, str(SCRIPTS_DIR / "health_sender.py"),
+            PYTHON_EXEC, str(DATASET_SCRIPTS_DIR / "health_sender.py"),
             "--device-id",   str(dev["id"]),
             "--device-type", dev["type"],
         ]

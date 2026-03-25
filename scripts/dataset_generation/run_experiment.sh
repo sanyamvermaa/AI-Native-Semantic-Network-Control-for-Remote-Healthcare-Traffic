@@ -17,7 +17,7 @@ R_PID=$!
 
 sleep 2
 
-sudo ip netns exec sender_ns "${PYTHON_EXEC}" "${SCRIPT_DIR}/health_sender.py" &
+sudo ip netns exec sender_ns "${PYTHON_EXEC}" "${SCRIPT_DIR}/health_sender.py" --device-id 0 --device-type ECG &
 S_PID=$!
 
 sleep "${DURATION}"

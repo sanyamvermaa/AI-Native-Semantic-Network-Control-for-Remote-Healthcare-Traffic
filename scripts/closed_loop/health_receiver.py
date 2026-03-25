@@ -20,7 +20,7 @@ from collections import defaultdict
 # ── Config ─────────────────────────────────────────────────────────
 BASE_DIR           = os.getenv(
     "HEALTH_DATA_BASE_DIR",
-    str(Path(__file__).resolve().parents[1] / "data" / "logs"),
+    str(Path(__file__).resolve().parents[2] / "data" / "logs"),
 )
 TELEMETRY_INTERVAL = 0.25        # flush every 0.25s
 DRAIN_BUDGET       = 0.15        # max time spent draining packets

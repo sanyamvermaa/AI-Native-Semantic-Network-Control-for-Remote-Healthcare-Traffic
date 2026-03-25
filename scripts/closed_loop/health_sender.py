@@ -69,7 +69,7 @@ parser.add_argument("--receiver-ip", type=str, default="10.0.0.2")
 parser.add_argument("--receiver-port",type=int, default=9000)
 default_base_dir = os.getenv(
     "HEALTH_DATA_BASE_DIR",
-    str(Path(__file__).resolve().parents[1] / "data" / "logs"),
+    str(Path(__file__).resolve().parents[2] / "data" / "logs"),
 )
 parser.add_argument("--base-dir",    type=str, default=default_base_dir)
 args = parser.parse_args()

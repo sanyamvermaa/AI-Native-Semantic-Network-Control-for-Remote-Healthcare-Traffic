@@ -5,9 +5,9 @@ set -euo pipefail
 # Automatic stress test for closed-loop adaptation in namespace topology.
 #
 # Usage:
-#   bash scripts/run_closed_loop_stress_auto.sh [duration_seconds] [stage_seconds]
+#   bash scripts/closed_loop/run_closed_loop_stress_auto.sh [duration_seconds] [stage_seconds]
 # Example:
-#   bash scripts/run_closed_loop_stress_auto.sh 180 20
+#   bash scripts/closed_loop/run_closed_loop_stress_auto.sh 180 20
 
 DURATION="${1:-180}"
 STAGE_SECONDS="${2:-20}"
@@ -18,8 +18,9 @@ else
     PYTHON_BIN="python3"
 fi
 
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SCRIPT_DIR="${PROJECT_DIR}/scripts"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SCRIPT_DIR="${PROJECT_DIR}/scripts/closed_loop"
+SETUP_SCRIPT="${PROJECT_DIR}/scripts/setup_namespaces.sh"
 RUN_DIR="${PROJECT_DIR}/outputs/results/stress_auto_$(date +%Y%m%d_%H%M%S)"
 DATA_DIR="${HEALTH_DATA_BASE_DIR:-${PROJECT_DIR}/data/logs}"
 
@@ -144,7 +145,7 @@ echo "[RUN] Output dir      : ${RUN_DIR}"
 echo "[RUN] Data dir        : ${DATA_DIR}"
 
 echo "[RUN] Setting up namespaces..."
-sudo "${SCRIPT_DIR}/setup_namespaces.sh"
+sudo "${SETUP_SCRIPT}"
 
 echo "[RUN] Starting receiver in receiver_ns..."
 sudo env HEALTH_DATA_BASE_DIR="${DATA_DIR}" ip netns exec receiver_ns "${PYTHON_BIN}" -u "${RECEIVER_SCRIPT}" > "${RECEIVER_LOG}" 2>&1 &

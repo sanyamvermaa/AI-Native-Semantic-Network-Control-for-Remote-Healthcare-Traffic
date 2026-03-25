@@ -2,7 +2,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOGS_DIR = PROJECT_ROOT / "data" / "logs"
 PLOTS_DIR = PROJECT_ROOT / "plots"
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
