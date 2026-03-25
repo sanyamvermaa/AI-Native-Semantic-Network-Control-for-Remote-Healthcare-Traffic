@@ -63,13 +63,14 @@ def dashboard_html() -> str:
       color: var(--text);
       min-height: 100vh;
     }
-    .container { max-width: 1360px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
+    .container { max-width: 1360px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; overflow-x: clip; }
     .card {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 12px;
       padding: 14px;
       box-shadow: 0 6px 20px rgba(15, 23, 42, 0.06);
+      overflow: hidden;
       transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
     }
     .top-bar { min-height: 72px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 14px; }
@@ -92,10 +93,21 @@ def dashboard_html() -> str:
     .active-command { margin-top: 8px; font-size: 13px; color: var(--muted); transition: color 0.3s ease; }
     .stats { text-align: right; color: var(--muted); font-size: 13px; line-height: 1.6; }
     .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: transparent; margin-left: 6px; vertical-align: middle; }
-    .metrics { display: grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 12px; }
+    .metrics { display: grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 12px; align-items: start; }
+    .metrics .card {
+      height: 220px;
+      display: flex;
+      flex-direction: column;
+    }
     .metric-head { display: flex; align-items: start; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
     .metric-title { color: var(--muted); font-size: 13px; }
     .metric-value { font-size: 30px; font-weight: 800; line-height: 1; }
+    .metrics canvas {
+      width: 100% !important;
+      height: 92px !important;
+      max-height: 92px !important;
+      margin-top: auto;
+    }
     .badge {
       font-size: 11px;
       border-radius: 999px;
@@ -153,12 +165,18 @@ def dashboard_html() -> str:
     .history { max-height: 300px; overflow-y: auto; margin-top: 8px; border: 1px solid var(--border); border-radius: 10px; background: #f8fafc; }
     .history-row {
       display: grid;
-      grid-template-columns: 74px 120px 16px 1fr 72px;
+      grid-template-columns: 70px 108px 16px minmax(0, 1fr) 62px;
       align-items: center;
       gap: 8px;
       padding: 10px;
       border-top: 1px solid #e2e8f0;
       font-size: 13px;
+    }
+    .history-row .badge {
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      vertical-align: middle;
     }
     .history-row:first-child { border-top: none; }
     .history-row.newest { background: #edf3ff; }
@@ -169,7 +187,17 @@ def dashboard_html() -> str:
       .state-wrap { text-align: left; }
       .stats { text-align: left; }
       .metrics { grid-template-columns: 1fr; }
+      .metrics .card { height: 210px; }
       .bottom-split { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 720px) {
+      .container { padding: 10px; gap: 12px; }
+      .history-row {
+        grid-template-columns: 1fr;
+        gap: 6px;
+      }
+      .history-row > div { min-width: 0; }
+      .state-badge { width: 100%; max-width: 260px; }
     }
   </style>
 </head>
@@ -243,6 +271,7 @@ def dashboard_html() -> str:
     let charts = {};
     let currentCommand = "N/A";
     const fetchStatus = { state: false, devices: false, telemetry: false, commands: false };
+    const CHART_WINDOW = 60;
 
     function setFetchFailure(endpoint, failed) {
       fetchStatus[endpoint] = !!failed;
@@ -267,7 +296,18 @@ def dashboard_html() -> str:
     function makeChart(canvasId, lineColor) {
       return new Chart(document.getElementById(canvasId), {
         type: "line",
-        data: { labels: [], datasets: [{ data: [], borderColor: lineColor, borderWidth: 2, pointRadius: 0, tension: 0.35, fill: true, backgroundColor: "rgba(88,166,255,0.2)" }] },
+        data: {
+          labels: Array(CHART_WINDOW).fill(""),
+          datasets: [{
+            data: Array(CHART_WINDOW).fill(null),
+            borderColor: lineColor,
+            borderWidth: 2,
+            pointRadius: 0,
+            tension: 0.35,
+            fill: true,
+            backgroundColor: "rgba(88,166,255,0.2)"
+          }]
+        },
         options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false }, tooltip: { enabled: false } }, scales: { x: { display: false }, y: { display: false } } }
       });
     }
@@ -359,11 +399,17 @@ def dashboard_html() -> str:
       bEl.textContent = t.label;
       setBadgeClass(bEl, t.cls);
       const chart = charts[ids[2]];
-      chart.data.labels.push("");
-      chart.data.datasets[0].data.push(Number(value) || 0);
+      const y = Number(value) || 0;
+      const series = chart.data.datasets[0].data;
+      const hasSeed = series.some(v => v !== null);
+      if (!hasSeed) {
+        chart.data.datasets[0].data = Array(CHART_WINDOW).fill(y);
+      } else {
+        series.shift();
+        series.push(y);
+      }
       chart.data.datasets[0].borderColor = t.color;
       chart.data.datasets[0].backgroundColor = `${t.color}22`;
-      if (chart.data.datasets[0].data.length > 60) { chart.data.datasets[0].data.shift(); chart.data.labels.shift(); }
       chart.update("none");
     }
 

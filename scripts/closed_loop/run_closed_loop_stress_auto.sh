@@ -40,6 +40,14 @@ STRESS_LOG="${RUN_DIR}/stress.log"
 : > "${SENDER_PID_FILE}"
 : > "${STRESS_LOG}"
 
+# Reset prior runtime artifacts so each run starts with fresh dashboard data.
+rm -f "${DATA_DIR}/network_telemetry.csv" \
+    "${DATA_DIR}/command_log.csv" \
+    "${DATA_DIR}/ward_mode_state.json" \
+    "${DATA_DIR}/receiver_log.csv" \
+    "${DATA_DIR}/sender_log.csv"
+rm -f "${DATA_DIR}"/sender_log_dev*.csv
+
 # Profiles aligned with project context.
 stable_loss=(0.0 0.8)
 stable_delay=(5 25)

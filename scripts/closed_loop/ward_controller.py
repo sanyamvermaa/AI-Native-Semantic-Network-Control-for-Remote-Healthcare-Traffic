@@ -17,6 +17,8 @@ def main() -> None:
     parser.add_argument("--window-timeout", type=float, default=3.0)
     parser.add_argument("--broadcast-ip", type=str, default="127.0.0.1")
     parser.add_argument("--sender-control-base-port", type=int, default=6000)
+    parser.add_argument("--debounce-windows", type=int, default=2)
+    parser.add_argument("--min-command-interval", type=float, default=1.0)
     args = parser.parse_args()
 
     base_dir = args.base_dir
@@ -49,6 +51,9 @@ def main() -> None:
     last_state = "UNKNOWN"
     consecutive = 0
     last_packet_ts = 0.0
+    pending_command = None
+    pending_count = 0
+    last_emit_ts = 0.0
 
     try:
         while True:
@@ -88,12 +93,25 @@ def main() -> None:
             network_state = normalize_network_state(payload.get("network_state"))
             health_state = normalize_health_state(payload.get("health_state"))
             source_ts = float(payload.get("timestamp") or recv_ts)
-            latency_ms = max(0.0, (recv_ts - source_ts) * 1000.0)
+            transport_ms = max(0.0, (recv_ts - source_ts) * 1000.0)
+            window_sec = float(payload.get("window_sec") or 0.25)
 
             if network_state == "UNKNOWN":
                 network_state = "Critical"
 
             command = policy_command(network_state, health_state)
+
+            if command == pending_command:
+                pending_count += 1
+            else:
+                pending_command = command
+                pending_count = 1
+
+            ready_to_emit = (
+                pending_count >= max(1, args.debounce_windows)
+                and command != last_command
+                and (recv_ts - last_emit_ts) >= args.min_command_interval
+            )
 
             if network_state == last_state:
                 consecutive += 1
@@ -101,8 +119,12 @@ def main() -> None:
                 consecutive = 1
                 last_state = network_state
 
+            applied_command = last_command if last_command != "N/A" else command
+            if ready_to_emit:
+                applied_command = command
+
             snapshot = {
-                "command": command,
+                "command": applied_command,
                 "network_state": network_state,
                 "health_state": health_state,
                 "timestamp": recv_ts,
@@ -115,43 +137,48 @@ def main() -> None:
             except Exception:
                 pass
 
-            try:
-                with open(command_log_path, "a", newline="", encoding="utf-8") as f:
-                    writer = csv.writer(f)
-                    writer.writerow(
-                        [
-                            round(recv_ts, 6),
-                            network_state,
-                            health_state,
-                            command,
-                            round(latency_ms, 3),
-                            consecutive,
-                        ]
-                    )
-            except Exception:
-                pass
+            if ready_to_emit:
+                decision_ms = pending_count * window_sec * 1000.0
+                latency_ms = decision_ms + transport_ms
 
-            control = {
-                "command": command,
-                "network_state": network_state,
-                "health_state": health_state,
-                "timestamp": recv_ts,
-                "consecutive_windows": consecutive,
-            }
-
-            encoded = json.dumps(control).encode("utf-8")
-            for dev_id, _ in DEVICE_LAYOUT:
                 try:
-                    out_sock.sendto(encoded, (args.broadcast_ip, args.sender_control_base_port + dev_id))
+                    with open(command_log_path, "a", newline="", encoding="utf-8") as f:
+                        writer = csv.writer(f)
+                        writer.writerow(
+                            [
+                                round(recv_ts, 6),
+                                network_state,
+                                health_state,
+                                command,
+                                round(latency_ms, 3),
+                                consecutive,
+                            ]
+                        )
                 except Exception:
                     pass
 
-            if command != last_command:
+                control = {
+                    "command": command,
+                    "network_state": network_state,
+                    "health_state": health_state,
+                    "timestamp": recv_ts,
+                    "consecutive_windows": consecutive,
+                    "debounced_windows": pending_count,
+                }
+
+                encoded = json.dumps(control).encode("utf-8")
+                for dev_id, _ in DEVICE_LAYOUT:
+                    try:
+                        out_sock.sendto(encoded, (args.broadcast_ip, args.sender_control_base_port + dev_id))
+                    except Exception:
+                        pass
+
                 print(
                     f"[WARD CMD] {network_state}/{health_state} -> {command} "
-                    f"(latency={latency_ms:.1f}ms, windows={consecutive})"
+                    f"(latency={latency_ms:.1f}ms, windows={consecutive}, debounce={pending_count})"
                 )
                 last_command = command
+                last_emit_ts = recv_ts
 
     except KeyboardInterrupt:
         print("\n[WARD] Shutdown requested.")
