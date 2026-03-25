@@ -1,6 +1,7 @@
 # Python virtual environment
 venv/
 .venv/
+.venv-1/
 
 # Python cache
 __pycache__/
@@ -15,5 +16,16 @@ __pycache__/
 
 # OS files
 .DS
+.DS_Store
 
 *.pkl
+
+# Generated datasets/logs/plots
+data/datasets/*.csv
+
+data/logs/*.csv
+data/logs/*.json
+plots/*.png
+
+# Editor scratch files
+tempCodeRunnerFile.py

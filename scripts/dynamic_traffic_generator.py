@@ -19,15 +19,23 @@ import time
 import random
 import csv
 import os
+import sys
+from pathlib import Path
 import pandas as pd
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 DURATION_SECONDS  = 3600*3
-BASE_DIR          = "/home/ayhm23/health_data/csv"
+PROJECT_ROOT      = Path(__file__).resolve().parents[1]
+SCRIPTS_DIR       = PROJECT_ROOT / "scripts"
+DATASETS_DIR      = PROJECT_ROOT / "data" / "datasets"
+LOGS_DIR          = PROJECT_ROOT / "data" / "logs"
+
+BASE_DIR          = str(LOGS_DIR)
 GROUND_TRUTH_FILE = os.path.join(BASE_DIR, "ground_truth_log.csv")
 os.makedirs(BASE_DIR, exist_ok=True)
+DATASETS_DIR.mkdir(parents=True, exist_ok=True)
 
-PYTHON_EXEC = "/home/ayhm23/miniconda3/bin/python3"
+PYTHON_EXEC = sys.executable
 
 # ── Device Fleet ──────────────────────────────────────────────────────────────
 DEVICES = [
@@ -140,7 +148,7 @@ def merge_data():
     
 
     # ── Save ──────────────────────────────────────────────────────────────────
-    output_file = "realistic_network_dataset.csv"
+    output_file = DATASETS_DIR / "realistic_network_dataset.csv"
     telem_df.to_csv(output_file, index=False)
 
     print(f"\n✅  Dataset saved -> {output_file}")
@@ -159,12 +167,12 @@ def main():
     print("══════════════════════════════════════════════════")
 
     print("\n[1/4] Setting up network namespaces ...")
-    subprocess.run(["sudo", "./setup_namespaces.sh"], check=True)
+    subprocess.run(["sudo", str(SCRIPTS_DIR / "setup_namespaces.sh")], check=True)
 
     print("[2/4] Starting central receiver ...")
     rx_cmd = [
         "sudo", "ip", "netns", "exec", "receiver_ns",
-        PYTHON_EXEC, "health_receiver.py"
+        PYTHON_EXEC, str(SCRIPTS_DIR / "health_receiver.py")
     ]
     rx_proc = subprocess.Popen(rx_cmd)
     time.sleep(2)
@@ -174,7 +182,7 @@ def main():
     for dev in DEVICES:
         tx_cmd = [
             "sudo", "ip", "netns", "exec", "sender_ns",
-            PYTHON_EXEC, "health_sender.py",
+            PYTHON_EXEC, str(SCRIPTS_DIR / "health_sender.py"),
             "--device-id",   str(dev["id"]),
             "--device-type", dev["type"],
         ]

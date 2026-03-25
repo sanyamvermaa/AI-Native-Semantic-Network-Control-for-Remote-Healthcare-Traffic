@@ -46,4 +46,4 @@ echo "[*] Testing connectivity..."
 sleep 1
 sudo ip netns exec $SENDER_NS ping -c 1 $RECEIVER_IP > /dev/null
 
-echo "[✓] Network namespaces are READY"
+echo "[âœ“] Network namespaces are READY"

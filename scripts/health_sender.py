@@ -13,6 +13,7 @@ import random
 import csv
 import os
 import argparse
+from pathlib import Path
 
 # ── Device Profiles ───────────────────────────────────────────────────────────
 # Each device type has its own send rate and realistic vital-sign ranges.
@@ -66,7 +67,11 @@ parser.add_argument("--device-id",   type=int, required=True,  help="Unique devi
 parser.add_argument("--device-type", type=str, default="ECG",  choices=DEVICE_PROFILES.keys())
 parser.add_argument("--receiver-ip", type=str, default="10.0.0.2")
 parser.add_argument("--receiver-port",type=int, default=9000)
-parser.add_argument("--base-dir",    type=str, default="/home/ayhm23/health_data/csv")
+default_base_dir = os.getenv(
+    "HEALTH_DATA_BASE_DIR",
+    str(Path(__file__).resolve().parents[1] / "data" / "logs"),
+)
+parser.add_argument("--base-dir",    type=str, default=default_base_dir)
 args = parser.parse_args()
 
 # ── Setup ─────────────────────────────────────────────────────────────────────

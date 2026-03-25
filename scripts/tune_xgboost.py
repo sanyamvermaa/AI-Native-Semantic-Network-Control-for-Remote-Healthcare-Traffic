@@ -7,6 +7,7 @@ If a better model is found, saves as xgboost_tuned_model.pkl
 """
 import pandas as pd
 import numpy as np
+from pathlib import Path
 from xgboost import XGBClassifier
 from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV
 from sklearn.metrics import classification_report, confusion_matrix, f1_score
@@ -17,9 +18,14 @@ warnings.filterwarnings("ignore")
 
 print("── XGBoost Hyperparameter Tuning ────────────────────────────────")
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DATASETS_DIR = PROJECT_ROOT / "data" / "datasets"
+MODELS_DIR = PROJECT_ROOT / "models"
+MODELS_DIR.mkdir(parents=True, exist_ok=True)
+
 # ── 1. Load ───────────────────────────────────────────────────────────────────
 try:
-    df = pd.read_csv("realistic_network_dataset.csv")
+    df = pd.read_csv(DATASETS_DIR / "realistic_network_dataset.csv")
     print(f"[+] Loaded {len(df)} rows.")
 except FileNotFoundError:
     print("[!] Dataset not found. Run dynamic_traffic_generator.py first.")
@@ -170,9 +176,9 @@ if tuned_f1 > baseline_f1:
         n_jobs=-1
     )
     full_tuned.fit(X, y_enc)
-    joblib.dump(full_tuned, "xgboost_tuned_model.pkl")
-    print(f"[✓] Tuned model saved → 'xgboost_tuned_model.pkl'")
-    print(f"    To use as best model, rename or update best_network_model.pkl")
+    joblib.dump(full_tuned, MODELS_DIR / "xgboost_tuned_model.pkl")
+    print(f"[✓] Tuned model saved → '{MODELS_DIR / 'xgboost_tuned_model.pkl'}'")
+    print(f"    To use as best model, copy/rename into '{MODELS_DIR / 'best_network_model.pkl'}'")
 else:
     print("\n[~] Current XGBoost params are already near-optimal for this dataset.")
     print("    No file saved — existing xgboost_network_model.pkl unchanged.")

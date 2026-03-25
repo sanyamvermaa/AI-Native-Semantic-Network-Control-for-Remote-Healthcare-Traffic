@@ -14,10 +14,14 @@ import time
 import csv
 import os
 import select
+from pathlib import Path
 from collections import defaultdict
 
 # ── Config ─────────────────────────────────────────────────────────
-BASE_DIR           = "/home/ayhm23/health_data/csv"
+BASE_DIR           = os.getenv(
+    "HEALTH_DATA_BASE_DIR",
+    str(Path(__file__).resolve().parents[1] / "data" / "logs"),
+)
 TELEMETRY_INTERVAL = 0.25        # flush every 0.25s
 DRAIN_BUDGET       = 0.15        # max time spent draining packets
 STATUS_INTERVAL    = 15.0        # print progress every 30 seconds
