@@ -21,6 +21,17 @@ from common import (
 app = Flask(__name__)
 BASE_DIR = os.environ.get("HEALTH_DATA_BASE_DIR", default_base_dir())
 
+# Stale timeout per device type — must reflect actual transmission intervals.
+# Temperature sends every 30 s; ECG/BP send at 100 Hz.  A flat 3-second cutoff
+# always flags Temperature as stale even when it is healthy.
+DEVICE_STALE_TIMEOUT: dict = {
+    "ECG":           5.0,    # 100 Hz → stale after 5 s
+    "SpO2":          10.0,   # 1 Hz   → stale after 10 s
+    "BloodPressure": 5.0,    # 100 Hz → stale after 5 s
+    "Temperature":   90.0,   # 30 s   → stale after 90 s  (3 × interval)
+    "Respiration":   10.0,   # 1 Hz   → stale after 10 s
+}
+
 
 @app.after_request
 def add_cors_headers(response):
@@ -107,6 +118,38 @@ def dashboard_html() -> str:
       height: 92px !important;
       max-height: 92px !important;
       margin-top: auto;
+    }
+    .semantic-card {
+      display: grid;
+      gap: 10px;
+    }
+    .semantic-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .semantic-table thead th {
+      text-align: left;
+      color: var(--muted);
+      font-weight: 700;
+      padding: 8px 6px;
+      border-bottom: 1px solid var(--border);
+    }
+    .semantic-table tbody td {
+      padding: 7px 6px;
+      border-bottom: 1px solid #e7edf6;
+    }
+    .semantic-table tbody tr:last-child td { border-bottom: none; }
+    .semantic-mode {
+      font-weight: 700;
+      color: #334155;
+    }
+    .semantic-num { text-align: right; font-variant-numeric: tabular-nums; }
+    .semantic-pct {
+      text-align: right;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: #475569;
     }
     .badge {
       font-size: 11px;
@@ -211,11 +254,13 @@ def dashboard_html() -> str:
       <div class=\"state-wrap\">
         <div id=\"stateBadge\" class=\"state-badge\">● UNKNOWN</div>
         <div id=\"activeCommand\" class=\"active-command\">Active command: N/A</div>
+        <div style=\"margin-top:6px\"><span id=\"healthStateBadge\" class=\"badge mode-pill\">UNKNOWN</span> <span style=\"font-size:12px;color:var(--muted)\">health</span></div>
       </div>
       <div class=\"stats\">
         <div id=\"latencyStat\">Latency: -- ms avg</div>
         <div id=\"updatedStat\">Updated: --<span id=\"fetchDot\" class=\"dot\"></span></div>
         <div id=\"devicesStat\">Devices: 0/8 online</div>
+        <div id="semanticStat">Semantic suppression: --</div>
       </div>
     </div>
 
@@ -223,6 +268,26 @@ def dashboard_html() -> str:
       <div class=\"card\"><div class=\"metric-head\"><div><div class=\"metric-title\">Packet Loss</div><div id=\"packetLossValue\" class=\"metric-value\">0.0%</div></div><span id=\"packetLossBadge\" class=\"badge badge-normal\">NORMAL</span></div><canvas id=\"packetLossChart\" height=\"80\"></canvas></div>
       <div class=\"card\"><div class=\"metric-head\"><div><div class=\"metric-title\">Average Delay</div><div id=\"delayValue\" class=\"metric-value\">0 ms</div></div><span id=\"delayBadge\" class=\"badge badge-normal\">NORMAL</span></div><canvas id=\"delayChart\" height=\"80\"></canvas></div>
       <div class=\"card\"><div class=\"metric-head\"><div><div class=\"metric-title\">Jitter</div><div id=\"jitterValue\" class=\"metric-value\">0 ms</div></div><span id=\"jitterBadge\" class=\"badge badge-normal\">NORMAL</span></div><canvas id=\"jitterChart\" height=\"80\"></canvas></div>
+    </div>
+
+    <div class=\"card semantic-card\">
+      <div class=\"section-title\">Semantic Mode Counters</div>
+      <table class=\"semantic-table\">
+        <thead>
+          <tr>
+            <th>Mode</th>
+            <th style=\"text-align:right\">Sent</th>
+            <th style=\"text-align:right\">Suppressed</th>
+            <th style=\"text-align:right\">Suppression</th>
+          </tr>
+        </thead>
+        <tbody id=\"semanticModeRows\">
+          <tr><td class=\"semantic-mode\">RAW</td><td class=\"semantic-num\">--</td><td class=\"semantic-num\">--</td><td class=\"semantic-pct\">--</td></tr>
+          <tr><td class=\"semantic-mode\">DELTA</td><td class=\"semantic-num\">--</td><td class=\"semantic-num\">--</td><td class=\"semantic-pct\">--</td></tr>
+          <tr><td class=\"semantic-mode\">SUMMARY</td><td class=\"semantic-num\">--</td><td class=\"semantic-num\">--</td><td class=\"semantic-pct\">--</td></tr>
+          <tr><td class=\"semantic-mode\">CRITICAL_ONLY</td><td class=\"semantic-num\">--</td><td class=\"semantic-num\">--</td><td class=\"semantic-pct\">--</td></tr>
+        </tbody>
+      </table>
     </div>
 
     <div class=\"card\">
@@ -270,7 +335,7 @@ def dashboard_html() -> str:
 
     let charts = {};
     let currentCommand = "N/A";
-    const fetchStatus = { state: false, devices: false, telemetry: false, commands: false };
+    const fetchStatus = { state: false, devices: false, telemetry: false, commands: false, semantic: false };
     const CHART_WINDOW = 60;
 
     function setFetchFailure(endpoint, failed) {
@@ -329,30 +394,53 @@ def dashboard_html() -> str:
         const r = await fetch("/api/state", { cache: "no-store" });
         if (!r.ok) throw new Error("state");
         const d = await r.json();
-        const s = STATE_COLORS[d.network_state] ? d.network_state : "UNKNOWN";
-        const c = STATE_COLORS[s];
-        const badge = document.getElementById("stateBadge");
-        badge.textContent = `● ${s.toUpperCase()}`;
-        badge.style.backgroundColor = c.bg;
-        badge.style.color = c.fg;
 
+        // seconds_ago can be null (no state file) — treat as "no data yet"
+        const secondsAgo = (d.seconds_ago !== null && d.seconds_ago !== undefined)
+          ? Number(d.seconds_ago) : null;
+        const isStale = secondsAgo === null || secondsAgo > 8;
+
+        const badge = document.getElementById("stateBadge");
+        if (isStale) {
+          badge.textContent = "⚠ NO DATA";
+          badge.style.backgroundColor = "#f1f5f9";
+          badge.style.color = "#94a3b8";
+        } else {
+          const s = STATE_COLORS[d.network_state] ? d.network_state : "UNKNOWN";
+          const c = STATE_COLORS[s];
+          badge.textContent = `● ${s.toUpperCase()}`;
+          badge.style.backgroundColor = c.bg;
+          badge.style.color = c.fg;
+        }
+
+        const s = STATE_COLORS[d.network_state] ? d.network_state : "UNKNOWN";
         currentCommand = d.command || "N/A";
         const cmdEl = document.getElementById("activeCommand");
         cmdEl.textContent = `Active command: ${currentCommand}`;
-        cmdEl.style.color = COMMAND_COLORS[currentCommand] || "#8b949e";
+        cmdEl.style.color = isStale ? "#94a3b8" : (COMMAND_COLORS[currentCommand] || "#8b949e");
 
-        document.getElementById("receiverState").textContent = s;
-        document.getElementById("controllerCommand").textContent = currentCommand;
+        // Health state indicator
+        const healthEl = document.getElementById("healthStateBadge");
+        if (healthEl) {
+          const hs = d.health_state || "UNKNOWN";
+          healthEl.textContent = hs;
+          healthEl.className = "badge " + (HEALTH_COLORS[hs] || "mode-pill");
+        }
 
-        const secondsAgo = Number(d.seconds_ago);
+        document.getElementById("receiverState").textContent = isStale ? "NO DATA" : s;
+        document.getElementById("controllerCommand").textContent = isStale ? "N/A" : currentCommand;
+
         const updatedEl = document.getElementById("updatedStat");
         const dot = document.getElementById("fetchDot").outerHTML;
-        if (Number.isFinite(secondsAgo)) {
+        if (secondsAgo === null) {
+          updatedEl.style.color = "#94a3b8";
+          updatedEl.innerHTML = `Updated: no data ${dot}`;
+        } else {
           const color = secondsAgo > 8 ? "#da3633" : secondsAgo > 3 ? "#d29922" : "#8b949e";
           updatedEl.style.color = color;
           updatedEl.innerHTML = `Updated: ${secondsAgo.toFixed(1)}s ago ${dot}`;
         }
-        document.title = `Ward Monitor — ${s}`;
+        document.title = `Ward Monitor — ${isStale ? "NO DATA" : s}`;
         setFetchFailure("state", false);
       } catch (_) { setFetchFailure("state", true); }
     }
@@ -413,11 +501,42 @@ def dashboard_html() -> str:
       chart.update("none");
     }
 
+    let chartSeeded = false;
+
+    function seedChartsFromHistory(data) {
+      // Fill charts from the historical arrays returned by /api/telemetry.
+      // Only run once on the first successful fetch so live updates take over.
+      const loss   = (data.packet_loss_rate || []).slice(-CHART_WINDOW);
+      const delay  = (data.avg_delay        || []).slice(-CHART_WINDOW);
+      const jitter = (data.jitter           || []).slice(-CHART_WINDOW);
+
+      function padLeft(arr, len) {
+        const out = Array(len).fill(null);
+        arr.forEach((v, i) => { out[len - arr.length + i] = v; });
+        return out;
+      }
+
+      [
+        ["packetLoss", padLeft(loss,   CHART_WINDOW)],
+        ["delay",      padLeft(delay,  CHART_WINDOW)],
+        ["jitter",     padLeft(jitter, CHART_WINDOW)],
+      ].forEach(([key, vals]) => {
+        const c = charts[key];
+        if (!c) return;
+        c.data.datasets[0].data = vals;
+        c.update("none");
+      });
+    }
+
     async function updateTelemetry() {
       try {
         const r = await fetch("/api/telemetry", { cache: "no-store" });
         if (!r.ok) throw new Error("telemetry");
         const d = await r.json();
+        if (!chartSeeded) {
+          seedChartsFromHistory(d);
+          chartSeeded = true;
+        }
         const cur = d.current || {};
         updateMetric("packet_loss_rate", cur.packet_loss_rate || 0, "%");
         updateMetric("avg_delay", cur.avg_delay || 0, " ms");
@@ -458,16 +577,58 @@ def dashboard_html() -> str:
       } catch (_) { setFetchFailure("commands", true); }
     }
 
+    async function updateSemanticStats() {
+      try {
+        const r = await fetch("/api/semantic_stats", { cache: "no-store" });
+        if (!r.ok) throw new Error("semantic");
+        const s = await r.json();
+        const sent = Number(s.total_sent || 0);
+        const suppressed = Number(s.total_suppressed || 0);
+        const total = Math.max(1, sent + suppressed);
+        const pct = (suppressed * 100.0) / total;
+        document.getElementById("semanticStat").textContent =
+          `Semantic suppression: ${suppressed}/${sent + suppressed} (${pct.toFixed(1)}%)`;
+
+        const modes = ["RAW", "DELTA", "SUMMARY", "CRITICAL_ONLY"];
+        const rows = modes.map((mode) => {
+          const modeStat = s.modes && s.modes[mode] ? s.modes[mode] : { sent: 0, suppressed: 0 };
+          const modeSent = Number(modeStat.sent || 0);
+          const modeSuppressed = Number(modeStat.suppressed || 0);
+          const modeTotal = Math.max(1, modeSent + modeSuppressed);
+          const modePct = (modeSuppressed * 100.0) / modeTotal;
+          return `
+            <tr>
+              <td class="semantic-mode">${mode}</td>
+              <td class="semantic-num">${modeSent}</td>
+              <td class="semantic-num">${modeSuppressed}</td>
+              <td class="semantic-pct">${modePct.toFixed(1)}%</td>
+            </tr>
+          `;
+        }).join("");
+        document.getElementById("semanticModeRows").innerHTML = rows;
+        setFetchFailure("semantic", false);
+      } catch (_) {
+        document.getElementById("semanticModeRows").innerHTML = `
+          <tr><td class="semantic-mode">RAW</td><td class="semantic-num">--</td><td class="semantic-num">--</td><td class="semantic-pct">--</td></tr>
+          <tr><td class="semantic-mode">DELTA</td><td class="semantic-num">--</td><td class="semantic-num">--</td><td class="semantic-pct">--</td></tr>
+          <tr><td class="semantic-mode">SUMMARY</td><td class="semantic-num">--</td><td class="semantic-num">--</td><td class="semantic-pct">--</td></tr>
+          <tr><td class="semantic-mode">CRITICAL_ONLY</td><td class="semantic-num">--</td><td class="semantic-num">--</td><td class="semantic-pct">--</td></tr>
+        `;
+        setFetchFailure("semantic", true);
+      }
+    }
+
     function bootstrap() {
       buildDevices();
       charts.packetLoss = makeChart("packetLossChart", "#15803d");
       charts.delay = makeChart("delayChart", "#15803d");
       charts.jitter = makeChart("jitterChart", "#15803d");
-      updateState(); updateDevices(); updateTelemetry(); updateCommands();
+      updateState(); updateDevices(); updateTelemetry(); updateCommands(); updateSemanticStats();
       setInterval(updateState, 1000);
       setInterval(updateDevices, 1000);
       setInterval(updateTelemetry, 1000);
       setInterval(updateCommands, 2000);
+      setInterval(updateSemanticStats, 2000);
     }
     window.addEventListener("DOMContentLoaded", bootstrap);
   </script>
@@ -563,14 +724,17 @@ def api_devices():
                     val = safe_float(last.get("value"))
                     if val is not None and abs(val - round(val)) < 1e-6:
                         val = int(round(val))
+                    resolved_type = str(last.get("device_type") or device_type)
+                    stale_timeout = DEVICE_STALE_TIMEOUT.get(resolved_type, 5.0)
                     item.update(
                         {
-                            "device_type": str(last.get("device_type") or device_type),
+                            "device_type": resolved_type,
                             "value": val,
                             "unit": str(last.get("unit") or ""),
                             "label": normalize_health_state(last.get("label")),
                             "seconds_ago": secs,
-                            "stale": secs > 3.0,
+                            "stale": secs > stale_timeout,
+                            "stale_timeout": stale_timeout,
                         }
                     )
         except Exception:
@@ -642,6 +806,50 @@ def api_commands():
         pass
 
     return jsonify(out)
+
+
+@app.route("/api/semantic_stats")
+def api_semantic_stats():
+    response = {
+        "total_sent": 0,
+        "total_suppressed": 0,
+        "devices_reporting": 0,
+        "modes": {
+            "RAW": {"sent": 0, "suppressed": 0},
+            "DELTA": {"sent": 0, "suppressed": 0},
+            "SUMMARY": {"sent": 0, "suppressed": 0},
+            "CRITICAL_ONLY": {"sent": 0, "suppressed": 0},
+        },
+    }
+
+    try:
+        for device_id, _device_type in DEVICE_LAYOUT:
+            pattern = os.path.join(BASE_DIR, f"sender_semantic_stats_dev{device_id}_*.csv")
+            matches = glob.glob(pattern)
+            if not matches:
+                continue
+
+            rows = read_csv_tail_rows(matches[0], 1)
+            if not rows:
+                continue
+            row = rows[-1]
+            response["devices_reporting"] += 1
+
+            response["total_sent"] += safe_int(row.get("total_sent"), 0)
+            response["total_suppressed"] += safe_int(row.get("total_suppressed"), 0)
+
+            response["modes"]["RAW"]["sent"] += safe_int(row.get("raw_sent"), 0)
+            response["modes"]["RAW"]["suppressed"] += safe_int(row.get("raw_suppressed"), 0)
+            response["modes"]["DELTA"]["sent"] += safe_int(row.get("delta_sent"), 0)
+            response["modes"]["DELTA"]["suppressed"] += safe_int(row.get("delta_suppressed"), 0)
+            response["modes"]["SUMMARY"]["sent"] += safe_int(row.get("summary_sent"), 0)
+            response["modes"]["SUMMARY"]["suppressed"] += safe_int(row.get("summary_suppressed"), 0)
+            response["modes"]["CRITICAL_ONLY"]["sent"] += safe_int(row.get("critical_only_sent"), 0)
+            response["modes"]["CRITICAL_ONLY"]["suppressed"] += safe_int(row.get("critical_only_suppressed"), 0)
+    except Exception:
+        pass
+
+    return jsonify(response)
 
 
 if __name__ == "__main__":

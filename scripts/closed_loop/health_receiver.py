@@ -311,6 +311,7 @@ def flush_telemetry(now: float) -> None:
         "timestamp": now,
         "network_state": network_state,
         "health_state": health_state,
+        "window_sec": TELEMETRY_INTERVAL,
         "packet_loss_rate": packet_loss_rate,
         "avg_delay_ms": avg_delay * 1000.0,
         "jitter_ms": avg_jitter * 1000.0,
@@ -369,14 +370,27 @@ try:
 
             recv_time = time.time()
             try:
-                parts = data.decode("utf-8", errors="replace").strip().split(",")
-                device_id = int(parts[0])
-                seq = int(parts[1])
-                send_time = float(parts[2])
-                device_type = parts[3]
-                _value = parts[4]
-                label = parts[5].strip().upper()
-                _ = device_type
+                raw = data.decode("utf-8", errors="replace").strip()
+                if raw.startswith("{"):
+                    packet = json.loads(raw)
+                    if not isinstance(packet, dict):
+                        continue
+                    device_id = int(packet.get("device_id"))
+                    seq = int(packet.get("seq"))
+                    send_time = float(packet.get("ts") or recv_time)
+                    device_type = str(packet.get("device_type") or "UNKNOWN")
+                    _value = packet.get("value", packet.get("mean", 0))
+                    label = str(packet.get("label") or "NORMAL").strip().upper()
+                    _ = device_type, _value
+                else:
+                    parts = raw.split(",")
+                    device_id = int(parts[0])
+                    seq = int(parts[1])
+                    send_time = float(parts[2])
+                    device_type = parts[3]
+                    _value = parts[4]
+                    label = parts[5].strip().upper()
+                    _ = device_type, _value
             except Exception:
                 continue
 

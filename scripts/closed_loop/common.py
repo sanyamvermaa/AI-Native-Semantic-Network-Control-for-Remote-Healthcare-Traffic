@@ -85,7 +85,7 @@ def normalize_health_state(raw: Any) -> str:
 def choose_network_state(packet_loss_rate: float, avg_delay_ms: float, jitter_ms: float) -> str:
     if packet_loss_rate >= 0.08 or avg_delay_ms >= 130.0 or jitter_ms >= 35.0:
         return "Critical"
-    if packet_loss_rate >= 0.03 or avg_delay_ms >= 40.0 or jitter_ms >= 8.0:
+    if packet_loss_rate >= 0.03 or avg_delay_ms >= 35.0 or jitter_ms >= 8.0:
         return "Unstable"
     return "Stable"
 
@@ -103,18 +103,30 @@ def choose_health_state(label_counts: Dict[str, int]) -> str:
 def policy_command(network_state: str, health_state: str) -> str:
     net = normalize_network_state(network_state)
     health = normalize_health_state(health_state)
+
+    # UNKNOWN health means the receiver window had zero labelled packets
+    # (startup race or a brief loss spike).  Treat it as NORMAL — benefit
+    # of the doubt — so a momentary empty window on a stable network does
+    # NOT collapse the fleet to SEMANTIC_SUMMARY.
+    # Critical network + UNKNOWN stays mapped via the Critical/NORMAL row
+    # (SEMANTIC_SUMMARY), which is intentional: bad channel AND no signal.
+    if health == "UNKNOWN":
+        health = "NORMAL"
+
     policy = {
-        ("Stable", "NORMAL"): "FULL_ECG",
-        ("Stable", "ALERT"): "FULL_ECG_PRIORITY",
-        ("Stable", "CRITICAL"): "SEMANTIC_CRITICAL",
-        ("Unstable", "NORMAL"): "DOWNSAMPLED_ECG",
-        ("Unstable", "ALERT"): "SEMANTIC_ALERT",
+        ("Stable",   "NORMAL"):   "FULL_ECG",
+        ("Stable",   "ALERT"):    "FULL_ECG_PRIORITY",
+        ("Stable",   "CRITICAL"): "SEMANTIC_CRITICAL",
+        ("Unstable", "NORMAL"):   "DOWNSAMPLED_ECG",
+        ("Unstable", "ALERT"):    "SEMANTIC_ALERT",
         ("Unstable", "CRITICAL"): "SEMANTIC_CRITICAL",
-        ("Critical", "NORMAL"): "SEMANTIC_SUMMARY",
-        ("Critical", "ALERT"): "SEMANTIC_ALERT",
+        ("Critical", "NORMAL"):   "SEMANTIC_SUMMARY",
+        ("Critical", "ALERT"):    "SEMANTIC_ALERT",
         ("Critical", "CRITICAL"): "SEMANTIC_CRITICAL",
     }
-    return policy.get((net, health), "SEMANTIC_SUMMARY")
+    # Fallback: DOWNSAMPLED_ECG for any unexpected combination — conservative
+    # but not as disruptive as suppressing everything with SEMANTIC_SUMMARY.
+    return policy.get((net, health), "DOWNSAMPLED_ECG")
 
 
 def tail_csv_lines(filepath: str, n_lines: int) -> List[str]:

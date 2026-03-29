@@ -50,7 +50,9 @@ def main() -> None:
     last_command = "N/A"
     last_state = "UNKNOWN"
     consecutive = 0
-    last_packet_ts = 0.0
+    # Initialise to now so the window_timeout countdown starts from boot,
+    # not from the Unix epoch (which would fire SEMANTIC_SUMMARY instantly).
+    last_packet_ts = time.time()
     pending_command = None
     pending_count = 0
     last_emit_ts = 0.0

@@ -47,6 +47,7 @@ rm -f "${DATA_DIR}/network_telemetry.csv" \
     "${DATA_DIR}/receiver_log.csv" \
     "${DATA_DIR}/sender_log.csv"
 rm -f "${DATA_DIR}"/sender_log_dev*.csv
+rm -f "${DATA_DIR}"/sender_semantic_stats_dev*.csv
 
 # Profiles aligned with project context.
 stable_loss=(0.0 0.8)
@@ -155,15 +156,19 @@ echo "[RUN] Data dir        : ${DATA_DIR}"
 echo "[RUN] Setting up namespaces..."
 sudo "${SETUP_SCRIPT}"
 
+
 echo "[RUN] Starting receiver in receiver_ns..."
+umask 022
 sudo env HEALTH_DATA_BASE_DIR="${DATA_DIR}" ip netns exec receiver_ns "${PYTHON_BIN}" -u "${RECEIVER_SCRIPT}" > "${RECEIVER_LOG}" 2>&1 &
 RECEIVER_PID=$!
 
 sleep 2
 
+
 if [[ -f "${WARD_SCRIPT}" ]]; then
     echo "[RUN] Starting ward controller in sender_ns..."
-    sudo env HEALTH_DATA_BASE_DIR="${DATA_DIR}" ip netns exec sender_ns "${PYTHON_BIN}" -u "${WARD_SCRIPT}" --base-dir "${DATA_DIR}" > "${WARD_LOG}" 2>&1 &
+    umask 022
+    sudo env HEALTH_DATA_BASE_DIR="${DATA_DIR}" ip netns exec sender_ns "${PYTHON_BIN}" -u "${WARD_SCRIPT}" --base-dir "${DATA_DIR}" --broadcast-ip 10.0.0.1 > "${WARD_LOG}" 2>&1 &
     WARD_PID=$!
 else
     echo "[RUN] ward_controller.py not found in scripts; skipping ward controller startup."
