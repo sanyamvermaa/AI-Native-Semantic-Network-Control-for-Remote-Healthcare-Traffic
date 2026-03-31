@@ -44,6 +44,7 @@ import math
 import os
 import random
 import socket
+import sys
 import time
 from typing import Deque, Dict, List, Optional, Tuple
 
@@ -57,6 +58,20 @@ try:
     _NK2_AVAILABLE = True
 except ImportError:
     _NK2_AVAILABLE = False
+
+# ---------------------------------------------------------------------------
+# Optional semantic codec imports
+# ---------------------------------------------------------------------------
+_SEMANTIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "semantic")
+if _SEMANTIC_DIR not in sys.path:
+    sys.path.insert(0, _SEMANTIC_DIR)
+
+try:
+    from semantic_encoder import SemanticEncoder          # type: ignore
+    from channel_quantizer import encode_payload, LATENT_DIMS_BY_COMMAND  # type: ignore
+    _SEMANTIC_AVAILABLE = True
+except ImportError:
+    _SEMANTIC_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
 # Device profiles
@@ -476,7 +491,7 @@ def main() -> None:
     log_writer  = csv.writer(log_f)
     stats_writer = csv.writer(stat_f)
 
-    log_writer.writerow(["seq", "timestamp", "device_id", "device_type", "value", "unit", "label"])
+    log_writer.writerow(["seq", "timestamp", "device_id", "device_type", "value", "unit", "label", "encoded"])
     stats_writer.writerow([
         "timestamp", "device_id", "device_type",
         "current_command", "current_mode",
@@ -497,6 +512,11 @@ def main() -> None:
     last_summary_emit = 0.0
 
     sem_buffer = SemanticBuffer(args.device_type, window=20)
+
+    # Semantic encoder (ML-based codec; None when _SEMANTIC_AVAILABLE is False or models absent)
+    _repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    models_dir = os.path.join(_repo_root, "models", "semantic")
+    sem_encoder = SemanticEncoder(args.device_type, models_dir) if _SEMANTIC_AVAILABLE else None
 
     burst_mode     = False
     burst_end_time = 0.0
@@ -580,7 +600,10 @@ def main() -> None:
             value = _next_value(burst_mode)
 
             # --- Label via clinical importance (replaces fragile high * 0.95) ---
-            importance = sem_buffer.clinical_importance(value)
+            if sem_encoder is not None:
+                importance = sem_encoder.clinical_importance_learned(value)
+            else:
+                importance = sem_buffer.clinical_importance(value)
             if burst_mode:
                 label = "CRITICAL"
             elif importance >= 0.7:
@@ -601,9 +624,37 @@ def main() -> None:
                 should_attempt      = True
                 is_intentional_skip = False
 
-            # --- Build and send payload ---
+            # --- Semantic encoder fast-path (SUMMARY / CRITICAL_ONLY modes only) ---
+            # push every tick so the buffer fills up regardless of transmission gating
+            used_sem_encoder = False
+            if sem_encoder is not None:
+                sem_encoder.push(float(value))
+                if should_attempt and tx_mode in ("SUMMARY", "CRITICAL_ONLY") and sem_encoder.ready:
+                    z = sem_encoder.encode()
+                    if z is not None:
+                        sem_payload = encode_payload(
+                            device_id   = args.device_id,
+                            seq         = tx_seq + 1,
+                            ts          = now,
+                            device_type = args.device_type,
+                            z           = z,
+                            command     = current_command,
+                            label       = label,
+                        )
+                        if sem_payload is not None:
+                            try:
+                                tx_sock.sendto(sem_payload, receiver)
+                                tx_seq += 1
+                                mode_counters[tx_mode]["sent"] += 1
+                                if tx_mode == "SUMMARY":
+                                    last_summary_emit = now
+                            except Exception:
+                                pass
+                            used_sem_encoder = True
+
+            # --- Build and send payload (legacy path when sem encoder not used) ---
             payload: Optional[bytes] = None
-            if should_attempt:
+            if not used_sem_encoder and should_attempt:
                 next_tx_seq = tx_seq + 1
                 payload = build_payload(
                     device_id   = args.device_id,
@@ -625,7 +676,7 @@ def main() -> None:
                         last_summary_emit = now
                 except Exception:
                     pass
-            elif not is_intentional_skip:
+            elif not is_intentional_skip and not used_sem_encoder:
                 # Only count as semantically suppressed when we tried and were filtered.
                 # Intentional SUMMARY skips are not counted — they are by design.
                 mode_counters[tx_mode]["suppressed"] += 1
@@ -635,6 +686,7 @@ def main() -> None:
                 sample_seq, now,
                 args.device_id, args.device_type,
                 value, profile["unit"], label,
+                used_sem_encoder,
             ])
 
             # --- Periodic flushes ---

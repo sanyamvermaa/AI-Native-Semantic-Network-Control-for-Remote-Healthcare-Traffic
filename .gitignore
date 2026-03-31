@@ -22,6 +22,11 @@ __pycache__/
 # Generated datasets/logs/plots
 
 data/logs/*.csv
+data/logs/
+data/eval_logs/
+models/semantic/
+
+
 data/logs/*.json
 plots/*.png
 

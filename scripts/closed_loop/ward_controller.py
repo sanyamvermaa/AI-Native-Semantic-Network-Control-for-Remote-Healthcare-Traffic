@@ -3,10 +3,24 @@ import csv
 import json
 import os
 import socket
+import sys
 import time
 from pathlib import Path
 
 from common import DEVICE_LAYOUT, default_base_dir, normalize_health_state, normalize_network_state, policy_command
+
+# ---------------------------------------------------------------------------
+# Optional patient fusion import
+# ---------------------------------------------------------------------------
+_SEMANTIC_DIR = str(Path(__file__).resolve().parents[1] / "semantic")
+if _SEMANTIC_DIR not in sys.path:
+    sys.path.insert(0, _SEMANTIC_DIR)
+
+try:
+    from patient_fusion import PatientFusionEncoder  # type: ignore
+    _FUSION_AVAILABLE = True
+except ImportError:
+    _FUSION_AVAILABLE = False
 
 
 def main() -> None:
@@ -24,6 +38,12 @@ def main() -> None:
     base_dir = args.base_dir
     os.makedirs(base_dir, exist_ok=True)
 
+    # Patient fusion encoder
+    _models_dir   = Path(__file__).resolve().parents[2] / "models" / "semantic"
+    fusion_encoder = PatientFusionEncoder(str(_models_dir)) if _FUSION_AVAILABLE else None
+    if fusion_encoder is not None:
+        print(f"[WARD] PatientFusionEncoder available={fusion_encoder.available}")
+
     state_path = os.path.join(base_dir, "ward_mode_state.json")
     command_log_path = os.path.join(base_dir, "command_log.csv")
 
@@ -37,6 +57,8 @@ def main() -> None:
                 "command",
                 "latency_ms",
                 "consecutive_windows",
+                "fusion_state",
+                "deterioration_prob",
             ])
 
     in_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -98,10 +120,42 @@ def main() -> None:
             transport_ms = max(0.0, (recv_ts - source_ts) * 1000.0)
             window_sec = float(payload.get("window_sec") or 0.25)
 
+            # --- Patient fusion: ingest z_per_device if present ---
+            fusion_result = None
+            if fusion_encoder is not None:
+                z_per_device = payload.get("z_per_device", [])
+                if isinstance(z_per_device, list):
+                    for entry in z_per_device:
+                        try:
+                            fusion_encoder.update(
+                                device_id   = int(entry["device_id"]),
+                                device_type = str(entry["device_type"]),
+                                z           = list(entry["z"]),
+                                timestamp   = recv_ts,
+                            )
+                        except (KeyError, TypeError, ValueError):
+                            pass
+                fusion_result = fusion_encoder.infer()
+
             if network_state == "UNKNOWN":
                 network_state = "Critical"
 
             command = policy_command(network_state, health_state)
+
+            # --- Fusion-driven health state escalation ---
+            if (
+                fusion_result is not None
+                and fusion_result.get("deterioration_prob") is not None
+                and fusion_result["deterioration_prob"] > 0.75
+                and network_state == "Stable"
+            ):
+                if health_state != "ALERT" and health_state != "CRITICAL":
+                    health_state = "ALERT"
+                    print(
+                        f"[FUSION] Deterioration prob {fusion_result['deterioration_prob']:.2f} "
+                        f"\u2014 escalating health_state to ALERT on stable network"
+                    )
+                    command = policy_command(network_state, health_state)
 
             if command == pending_command:
                 pending_count += 1
@@ -125,12 +179,17 @@ def main() -> None:
             if ready_to_emit:
                 applied_command = command
 
+            _fusion_state   = fusion_result["joint_state"]         if fusion_result else None
+            _det_prob       = fusion_result["deterioration_prob"]   if fusion_result else None
+
             snapshot = {
-                "command": applied_command,
-                "network_state": network_state,
-                "health_state": health_state,
-                "timestamp": recv_ts,
+                "command":             applied_command,
+                "network_state":       network_state,
+                "health_state":        health_state,
+                "timestamp":           recv_ts,
                 "consecutive_windows": consecutive,
+                "fusion_state":        _fusion_state,
+                "deterioration_prob":  _det_prob,
             }
 
             try:
@@ -154,6 +213,8 @@ def main() -> None:
                                 command,
                                 round(latency_ms, 3),
                                 consecutive,
+                                _fusion_state,
+                                round(_det_prob, 4) if _det_prob is not None else None,
                             ]
                         )
                 except Exception:

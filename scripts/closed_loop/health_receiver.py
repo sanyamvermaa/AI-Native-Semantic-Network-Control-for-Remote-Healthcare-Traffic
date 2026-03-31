@@ -9,12 +9,27 @@ import json
 import os
 import select
 import socket
+import sys
 import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List
 
-from common import choose_health_state, choose_network_state, default_base_dir
+from common import choose_health_state, choose_network_state, default_base_dir, DEVICE_LAYOUT
+
+# ---------------------------------------------------------------------------
+# Optional semantic codec imports
+# ---------------------------------------------------------------------------
+_SEMANTIC_DIR = str(Path(__file__).resolve().parents[1] / "semantic")
+if _SEMANTIC_DIR not in sys.path:
+    sys.path.insert(0, _SEMANTIC_DIR)
+
+try:
+    from semantic_encoder import SemanticEncoder          # type: ignore
+    from channel_quantizer import decode_payload          # type: ignore
+    _SEMANTIC_AVAILABLE = True
+except ImportError:
+    _SEMANTIC_AVAILABLE = False
 
 BASE_DIR = default_base_dir()
 TELEMETRY_INTERVAL = 0.25 #reciever computes telemetry and makes predictions every 250msq
@@ -50,6 +65,10 @@ delay_sum = 0.0
 delay_count = 0
 active_devices_window = set()
 label_counts = defaultdict(int)
+decode_confidence_sum = 0.0
+decode_confidence_count = 0
+# Latest latent vector per device_id — forwarded to ward_controller in each flush
+_last_z: Dict[int, Dict] = {}  # {device_id: {"device_type": str, "z": List[float]}}
 
 telemetry_path = os.path.join(BASE_DIR, "network_telemetry.csv")
 telemetry_file = open(telemetry_path, "w", newline="", encoding="utf-8")
@@ -212,6 +231,19 @@ def build_feature_row(curr: Dict[str, float], history: List[Dict[str, float]]) -
 
 model = load_model()
 
+# ---------------------------------------------------------------------------
+# Per-device-type semantic decoder instances
+# ---------------------------------------------------------------------------
+device_decoders: Dict[str, "SemanticEncoder"] = {}
+if _SEMANTIC_AVAILABLE:
+    _models_dir = Path(__file__).resolve().parents[2] / "models" / "semantic"
+    for _, _dev_type in DEVICE_LAYOUT:
+        if _dev_type not in device_decoders:
+            try:
+                device_decoders[_dev_type] = SemanticEncoder(_dev_type, str(_models_dir))
+            except Exception as _e:
+                print(f"[WARN] Could not load semantic decoder for {_dev_type}: {_e}")
+
 #flush current telemetry and send initial state to ward controller 
 #predict initial network state based on empty history
 
@@ -223,6 +255,8 @@ def flush_telemetry(now: float) -> None:
     global active_devices_window
     global telemetry_rows
     global label_counts
+    global decode_confidence_sum, decode_confidence_count
+    global _last_z
 
     total_attempted = received_packets + lost_packets
     packet_loss_rate = (lost_packets / total_attempted) if total_attempted > 0 else 0.0
@@ -232,8 +266,21 @@ def flush_telemetry(now: float) -> None:
     throughput_bps = bytes_received / TELEMETRY_INTERVAL
     bandwidth_bps = bytes_attempted / TELEMETRY_INTERVAL
 
+    avg_decode_confidence = (
+        decode_confidence_sum / decode_confidence_count
+        if decode_confidence_count > 0 else None
+    )
+
     heuristic_state = choose_network_state(packet_loss_rate, avg_delay * 1000.0, avg_jitter * 1000.0)
     health_state = choose_health_state(label_counts)
+
+    if avg_decode_confidence is not None and avg_decode_confidence < 0.55:
+        if health_state != "CRITICAL":
+            health_state = "NORMAL"
+            print(
+                f"[SEMANTIC] Low decode confidence {avg_decode_confidence:.2f} "
+                "\u2014 health state held at NORMAL"
+            )
 
     feature_snapshot = {
         "bandwidth_usage_bps": bandwidth_bps,
@@ -321,6 +368,12 @@ def flush_telemetry(now: float) -> None:
         "jitter_ms": avg_jitter * 1000.0,
         "active_devices": len(active_devices_window),
         "packets_per_window": total_attempted,
+        "decode_confidence": avg_decode_confidence,
+        "semantic_packets_in_window": decode_confidence_count,
+        "z_per_device": [
+            {"device_id": did, "device_type": entry["device_type"], "z": entry["z"]}
+            for did, entry in _last_z.items()
+        ],
     }
 
     try:
@@ -340,6 +393,8 @@ def flush_telemetry(now: float) -> None:
     delay_count = 0
     active_devices_window = set()
     label_counts = defaultdict(int)
+    decode_confidence_sum = 0.0
+    decode_confidence_count = 0
 
 
 start_time = time.time()
@@ -397,6 +452,27 @@ try:
                     _ = device_type, _value
             except Exception:
                 continue
+
+            # --- Semantic decoder path (overrides label if packet was encoded) ---
+            decoded_result = None
+            if _SEMANTIC_AVAILABLE:
+                decoded_result = decode_payload(data)
+
+            if decoded_result is not None:
+                z_full = decoded_result["z_full"]
+                dev_type = decoded_result.get("device_type", "UNKNOWN")
+                decoder = device_decoders.get(dev_type)
+                if decoder is not None:
+                    result = decoder.decode(z_full)
+                    label = result["clinical_state"]
+                    _conf = result["confidence"]
+                    decode_confidence_sum += _conf
+                    decode_confidence_count += 1
+                else:
+                    label = str(decoded_result.get("label", "NORMAL")).strip().upper()
+                # Store latest z for this device for ward_controller forwarding
+                _last_z[device_id] = {"device_type": dev_type, "z": list(z_full)}
+            # else: label already set by legacy parsing path above
 
             device_last_seen[device_id] = recv_time
             delay = recv_time - send_time
