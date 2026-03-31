@@ -17,9 +17,9 @@ from typing import Dict, List
 from common import choose_health_state, choose_network_state, default_base_dir
 
 BASE_DIR = default_base_dir()
-TELEMETRY_INTERVAL = 0.25
-DRAIN_BUDGET = 0.15
-STATUS_INTERVAL = 15.0
+TELEMETRY_INTERVAL = 0.25 #reciever computes telemetry and makes predictions every 250msq
+DRAIN_BUDGET = 0.15 #when a packet is received, spend up to 150ms draining the socket to get the most recent data for the window, then compute telemetry and predict
+STATUS_INTERVAL = 15.0 #periodically print status updates every 15 seconds
 
 WARD_IP = os.getenv("WARD_CONTROLLER_IP", "10.0.0.1")
 WARD_PORT = int(os.getenv("WARD_CONTROLLER_PORT", "5006"))
@@ -27,14 +27,14 @@ MODEL_PATH_ENV = os.getenv("HEALTH_NETWORK_MODEL_PATH", "")
 
 os.makedirs(BASE_DIR, exist_ok=True)
 
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) #for receiving clinical data from devices
 sock.setblocking(False)
 sock.bind(("0.0.0.0", 9000))
 
-ward_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+ward_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) #for sending telemetry and predictions to the ward controller
 
-print("[Receiver] Closed-loop gateway listening on :9000")
-print(f"[Receiver] Ward controller target: {WARD_IP}:{WARD_PORT}")
+print("\n[Receiver] Closed-loop gateway listening on :9000")
+print(f"[Receiver] Ward controller target: {WARD_IP}:{WARD_PORT}\n")
 
 device_expected_seq = defaultdict(lambda: 1)
 device_prev_delay = defaultdict(lambda: None)
@@ -67,7 +67,7 @@ telemetry_writer.writerow(
         "network_condition",
     ]
 )
-telemetry_file.flush()
+telemetry_file.flush() #ensure header is written to disk immediately
 
 telemetry_rows = 0
 window_history: List[Dict[str, float]] = []
@@ -76,13 +76,11 @@ window_history: List[Dict[str, float]] = []
 def mean_or_zero(values: List[float]) -> float:
     return sum(values) / len(values) if values else 0.0
 
-
 def std_or_zero(values: List[float]) -> float:
     if len(values) < 2:
         return 0.0
     m = mean_or_zero(values)
     return (sum((v - m) ** 2 for v in values) / len(values)) ** 0.5
-
 
 def simple_slope(values: List[float]) -> float:
     n = len(values)
@@ -144,7 +142,7 @@ def load_model():
         try:
             if path.exists():
                 model = joblib.load(path)
-                print(f"[MODEL] Loaded model: {path}")
+                print(f"\n[MODEL] Loaded model: {path}")
                 return model
         except Exception as exc:
             print(f"[WARN] Failed to load model {path}: {exc}")
@@ -169,9 +167,11 @@ def build_feature_row(curr: Dict[str, float], history: List[Dict[str, float]]) -
     loss_delta = loss_vals[-1] - loss_vals[-2] if len(loss_vals) >= 2 else 0.0
     jitter_delta = jitter_vals[-1] - jitter_vals[-2] if len(jitter_vals) >= 2 else 0.0
     delay_delta = delay_vals[-1] - delay_vals[-2] if len(delay_vals) >= 2 else 0.0
+
     prev_loss_delta = loss_vals[-2] - loss_vals[-3] if len(loss_vals) >= 3 else 0.0
     loss_accel = loss_delta - prev_loss_delta
 
+    #short windows to capture recent trends without too much smoothing
     loss3 = mean_or_zero(rolling(loss_vals, 3))
     loss8 = mean_or_zero(rolling(loss_vals, 8))
     thr3 = mean_or_zero(rolling(thr_vals, 3))
@@ -179,6 +179,8 @@ def build_feature_row(curr: Dict[str, float], history: List[Dict[str, float]]) -
     delay3 = mean_or_zero(rolling(delay_vals, 3))
     delay8 = mean_or_zero(rolling(delay_vals, 8))
 
+    #24 features total - 
+    # original 7 plus engineered features based on recent history and trends
     row = {
         "bandwidth_usage_bps": curr["bandwidth_usage_bps"],
         "throughput_bps": curr["throughput_bps"],
@@ -210,6 +212,8 @@ def build_feature_row(curr: Dict[str, float], history: List[Dict[str, float]]) -
 
 model = load_model()
 
+#flush current telemetry and send initial state to ward controller 
+#predict initial network state based on empty history
 
 def flush_telemetry(now: float) -> None:
     global bytes_received, bytes_attempted

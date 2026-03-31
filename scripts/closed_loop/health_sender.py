@@ -136,7 +136,7 @@ COMMAND_SEMANTIC_MAP: Dict[str, Tuple[str, float]] = {
     "FULL_ECG":           ("RAW",           1.0),   # full rate, every sample
     "FULL_ECG_PRIORITY":  ("RAW",           0.8),   # slightly faster than normal
     "DOWNSAMPLED_ECG":    ("DELTA",         4.0),   # ECG: 100Hz→25Hz (integer ratio)
-                                                     # non-ECG: overridden to 1.0× below
+                                                    # non-ECG: overridden to 1.0× below
     "SEMANTIC_ALERT":     ("DELTA",         1.5),   # rate slows + delta filter
     "SEMANTIC_CRITICAL":  ("CRITICAL_ONLY", 1.0),   # hold rate; suppression does the work
     "SEMANTIC_SUMMARY":   ("SUMMARY",       8.0),   # slow base rate + time-gated summaries

@@ -81,7 +81,7 @@ def normalize_health_state(raw: Any) -> str:
         return "CRITICAL"
     return "UNKNOWN"
 
-
+#rule-based network classifier based on thresholds for packet loss, delay, and jitter
 def choose_network_state(packet_loss_rate: float, avg_delay_ms: float, jitter_ms: float) -> str:
     if packet_loss_rate >= 0.08 or avg_delay_ms >= 130.0 or jitter_ms >= 35.0:
         return "Critical"
@@ -89,7 +89,7 @@ def choose_network_state(packet_loss_rate: float, avg_delay_ms: float, jitter_ms
         return "Unstable"
     return "Stable"
 
-
+#classifier based on counts of NORMAL, ALERT, and CRITICAL labels in the receiver window
 def choose_health_state(label_counts: Dict[str, int]) -> str:
     if label_counts.get("CRITICAL", 0) > 0:
         return "CRITICAL"
@@ -99,7 +99,7 @@ def choose_health_state(label_counts: Dict[str, int]) -> str:
         return "NORMAL"
     return "UNKNOWN"
 
-
+#Brain of the closed-loop system 
 def policy_command(network_state: str, health_state: str) -> str:
     net = normalize_network_state(network_state)
     health = normalize_health_state(health_state)
