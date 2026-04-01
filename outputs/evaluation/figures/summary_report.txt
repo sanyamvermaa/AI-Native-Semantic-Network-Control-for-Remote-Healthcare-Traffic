@@ -1,0 +1,59 @@
+====================================================================
+  SEMANTIC NETWORK CONTROL — EVALUATION SUMMARY REPORT
+====================================================================
+
+── 1. Bandwidth ────────────────────────────────────────────────────
+  Baseline mean throughput    : 22.60 kbps
+  Closed-loop mean throughput : 20.62 kbps
+  Overall bandwidth saving    : 8.8%
+
+  Per network-state savings:
+    Stable      : +7.0%  saving vs baseline
+    Unstable    : +4.6%  saving vs baseline
+    Critical    : +9.9%  saving vs baseline
+
+── 2. Packet Loss ──────────────────────────────────────────────────
+  Baseline mean loss    : 40.56%
+  Closed-loop mean loss : 40.05%
+
+── 3. Semantic Suppression  (Closed-Loop) ──────────────────────────
+  Total samples generated :       69,429
+  Total transmitted       :       44,949  (64.7%)
+  Total suppressed        :       24,480  (35.3%)
+
+  Mode                      Sent    Suppressed
+  ──────────────────  ──────────  ────────────
+  RAW                      5,840             0
+  DELTA                       46         3,506
+  CRITICAL_ONLY           39,063        20,974
+
+── 4. Adaptation Latency ───────────────────────────────────────────
+  Median  (p50) :     504 ms
+  p75           :    1065 ms
+  p90           :    1254 ms
+  p95           :    1254 ms
+  N events     :      28
+
+── 5. Command Distribution ─────────────────────────────────────────
+  Command                     Count        %
+  ────────────────────────  ───────  ───────
+  FULL_ECG                        9    32.1%
+  SEMANTIC_CRITICAL               9    32.1%
+  SEMANTIC_ALERT                  8    28.6%
+  FULL_ECG_PRIORITY               2     7.1%
+
+── 6. Network State Coverage ───────────────────────────────────────
+  Baseline:
+    Stable      :   156 windows (21.2%)
+    Unstable    :    83 windows (11.3%)
+    Critical    :   496 windows (67.5%)
+  Closed-Loop:
+    Stable      :   198 windows (26.8%)
+    Unstable    :    56 windows (7.6%)
+    Critical    :   486 windows (65.7%)
+
+── 7. ML vs Heuristic Agreement  (Closed-Loop) ─────────────────────
+  Overall agreement rate : 66.8%
+  (windows where ML predictor matched rule-based heuristic)
+
+====================================================================

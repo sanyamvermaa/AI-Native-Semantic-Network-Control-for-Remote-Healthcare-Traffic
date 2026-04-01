@@ -82,6 +82,16 @@ COMMAND_MARKERS = {
 # Helpers
 # ---------------------------------------------------------------------------
 
+# Severity ordering used for worst-case window aggregation
+SEVERITY = {"NORMAL": 0, "ALERT": 1, "CRITICAL": 2}
+
+
+def _worst_label(series: pd.Series) -> str:
+    """Return the most severe clinical label in a Series (CRITICAL > ALERT > NORMAL)."""
+    worst = max(series, key=lambda x: SEVERITY.get(str(x).strip().upper(), 0))
+    return str(worst).strip().upper()
+
+
 def _save(fig: plt.Figure, path_no_ext: str) -> None:
     for ext in ("pdf", "png"):
         fig.savefig(f"{path_no_ext}.{ext}", bbox_inches="tight")
@@ -285,9 +295,16 @@ def compute_cell_metrics(df: pd.DataFrame) -> pd.DataFrame:
     """
     Compute per (network_condition × command) cell:
       clinical_state_f1, bandwidth_bytes, bandwidth_reduction, decode_confidence_mean
+
+    F1 is computed at the 250ms-window level (floor timestamp to nearest 0.25s),
+    taking the worst-case ground-truth label and worst-case decoded label per window.
     """
     if df.empty:
         return pd.DataFrame()
+
+    # Pre-compute 250ms window key once for all rows
+    df = df.copy()
+    df["_win_key"] = (df["timestamp"] // 0.25).astype("int64")
 
     records = []
     for net_cond in df["network_condition"].unique():
@@ -296,10 +313,19 @@ def compute_cell_metrics(df: pd.DataFrame) -> pd.DataFrame:
             if cell.empty:
                 continue
 
-            true_labels   = cell["label"].tolist()
-            dec_labels    = cell["decoded_label"].tolist()
+            # --- Window-level aggregation (worst-case label per 250ms bucket) ---
+            win_agg = (
+                cell.groupby("_win_key")
+                .agg(
+                    true_label=("label", _worst_label),
+                    dec_label=("decoded_label", _worst_label),
+                )
+            )
 
-            if len(set(true_labels)) < 1:
+            true_labels = win_agg["true_label"].tolist()
+            dec_labels  = win_agg["dec_label"].tolist()
+
+            if len(true_labels) < 1:
                 f1 = float("nan")
             else:
                 try:
@@ -312,6 +338,7 @@ def compute_cell_metrics(df: pd.DataFrame) -> pd.DataFrame:
                 except Exception:
                     f1 = float("nan")
 
+            # Bandwidth and confidence remain packet-level metrics
             bw_bytes       = cell["packet_bytes"].sum()
             raw_baseline   = len(cell) * RAW_PACKET_SIZE
             bw_reduction   = 1.0 - bw_bytes / raw_baseline if raw_baseline > 0 else 0.0
@@ -332,6 +359,7 @@ def compute_cell_metrics(df: pd.DataFrame) -> pd.DataFrame:
                 "decode_confidence_mean": conf_mean,
                 "n_packets":           len(cell),
                 "n_encoded":           int(cell["encoded"].sum()),
+                "n_windows":           len(win_agg),
             })
 
     return pd.DataFrame(records)
@@ -589,10 +617,19 @@ def print_and_save_summary(
     emit("  Semantic Fidelity Summary Report")
     emit("=" * 62)
 
-    # Overall F1
+    # Overall F1 — computed at 250ms-window level (worst-case label per window)
     if not df_all.empty and "label" in df_all.columns and "decoded_label" in df_all.columns:
-        true_all = df_all["label"].tolist()
-        dec_all  = df_all["decoded_label"].tolist()
+        df_win = df_all.copy()
+        df_win["_win_key"] = (df_win["timestamp"] // 0.25).astype("int64")
+        win_agg_all = (
+            df_win.groupby("_win_key")
+            .agg(
+                true_label=("label", _worst_label),
+                dec_label=("decoded_label", _worst_label),
+            )
+        )
+        true_all = win_agg_all["true_label"].tolist()
+        dec_all  = win_agg_all["dec_label"].tolist()
         try:
             overall_f1 = f1_score(
                 true_all, dec_all,
@@ -602,10 +639,13 @@ def print_and_save_summary(
             )
         except Exception:
             overall_f1 = float("nan")
+        n_win_total = len(win_agg_all)
     else:
-        overall_f1 = float("nan")
+        overall_f1  = float("nan")
+        n_win_total = 0
 
     emit(f"Overall clinical state F1 (all modes, all conditions): {overall_f1:.3f}"
+         f"  [{n_win_total} windows @ 0.25 s]"
          if not np.isnan(overall_f1) else "Overall clinical state F1: N/A")
 
     # Best/worst under Critical network
@@ -710,8 +750,9 @@ def main() -> None:
     if cells.empty:
         print("[WARN] No cell metrics computed — check logs.")
     else:
-        print(cells[["network_condition", "command", "clinical_state_f1",
-                      "bandwidth_reduction", "decode_confidence_mean"]].to_string(index=False))
+        cols = ["network_condition", "command", "clinical_state_f1",
+                "bandwidth_reduction", "decode_confidence_mean", "n_windows"]
+        print(cells[[c for c in cols if c in cells.columns]].to_string(index=False))
 
     # --- Figures ---
     print("\n[STEP 4] Generating figures...")

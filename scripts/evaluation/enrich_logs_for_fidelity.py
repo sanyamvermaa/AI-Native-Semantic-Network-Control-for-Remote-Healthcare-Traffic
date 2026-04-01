@@ -48,7 +48,7 @@ from channel_quantizer import quantize, dequantize  # noqa: E402
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-WINDOW_SIZE = 200      # rows per window — must match metadata.json window_size
+WINDOW_SIZE = 25       # rows per window — must match metadata.json window_size
 LATENT_DIM  = 16
 
 # Devices to process: (device_id, device_type)

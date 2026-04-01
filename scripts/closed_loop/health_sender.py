@@ -444,6 +444,9 @@ def main() -> None:
     parser.add_argument("--base-dir",             type=str, default=default_base_dir())
     parser.add_argument("--control-ip",           type=str, default="0.0.0.0")
     parser.add_argument("--control-base-port",    type=int, default=6000)
+    parser.add_argument("--initial-command",      type=str, default="FULL_ECG",
+                        choices=list(COMMAND_SEMANTIC_MAP.keys()),
+                        help="Starting transmission command before first ward_controller message")
     args = parser.parse_args()
 
     profile  = DEVICE_PROFILES[args.device_type]
@@ -505,9 +508,12 @@ def main() -> None:
     stat_f.flush()
 
     # --- State ---
-    current_command   = "FULL_ECG"
-    tx_mode           = "RAW"
-    current_interval  = profile["interval"]
+    current_command  = args.initial_command
+    _init_mode, _init_mult = COMMAND_SEMANTIC_MAP.get(current_command, ("RAW", 1.0))
+    if current_command == "DOWNSAMPLED_ECG" and args.device_type != "ECG":
+        _init_mult = 1.0
+    tx_mode          = _init_mode
+    current_interval = max(MIN_INTERVAL, profile["interval"] * _init_mult)
     summary_interval  = profile["summary_interval"]   # time-gate for SUMMARY mode
     last_summary_emit = 0.0
 
@@ -629,7 +635,7 @@ def main() -> None:
             used_sem_encoder = False
             if sem_encoder is not None:
                 sem_encoder.push(float(value))
-                if should_attempt and tx_mode in ("SUMMARY", "CRITICAL_ONLY") and sem_encoder.ready:
+                if should_attempt and current_command.startswith("SEMANTIC_") and sem_encoder.ready:
                     z = sem_encoder.encode()
                     if z is not None:
                         sem_payload = encode_payload(

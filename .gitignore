@@ -25,13 +25,15 @@ data/logs/*.csv
 data/logs/
 data/eval_logs/
 models/semantic/
+data/integration_test/
 
 
 data/logs/*.json
 plots/*.png
+plots/semantic_fidelity/
 
 # Editor scratch files
 tempCodeRunnerFile.py
 
 
-outputs/
+outputs/results

@@ -42,13 +42,16 @@ MODEL_PATH_ENV = os.getenv("HEALTH_NETWORK_MODEL_PATH", "")
 
 os.makedirs(BASE_DIR, exist_ok=True)
 
+LISTEN_PORT    = int(os.getenv("RECEIVER_PORT", "9000"))
+DRAIN_LOG_PATH = os.getenv("SEMANTIC_DRAIN_PATH", os.path.join(BASE_DIR, "semantic_drain.csv"))
+
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) #for receiving clinical data from devices
 sock.setblocking(False)
-sock.bind(("0.0.0.0", 9000))
+sock.bind(("0.0.0.0", LISTEN_PORT))
 
 ward_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) #for sending telemetry and predictions to the ward controller
 
-print("\n[Receiver] Closed-loop gateway listening on :9000")
+print(f"\n[Receiver] Closed-loop gateway listening on :{LISTEN_PORT}")
 print(f"[Receiver] Ward controller target: {WARD_IP}:{WARD_PORT}\n")
 
 device_expected_seq = defaultdict(lambda: 1)
@@ -87,6 +90,14 @@ telemetry_writer.writerow(
     ]
 )
 telemetry_file.flush() #ensure header is written to disk immediately
+
+# Semantic drain log — one row per decoded semantic packet
+drain_log_file   = open(DRAIN_LOG_PATH, "w", newline="", encoding="utf-8")
+drain_log_writer = csv.writer(drain_log_file)
+drain_log_writer.writerow(["timestamp", "device_id", "device_type", "seq",
+                            "n_dims", "decoded_label", "confidence"])
+drain_log_file.flush()
+print(f"[Receiver] Semantic drain log : {DRAIN_LOG_PATH}")
 
 telemetry_rows = 0
 window_history: List[Dict[str, float]] = []
@@ -459,17 +470,27 @@ try:
                 decoded_result = decode_payload(data)
 
             if decoded_result is not None:
-                z_full = decoded_result["z_full"]
+                z_full   = decoded_result["z_full"]
                 dev_type = decoded_result.get("device_type", "UNKNOWN")
-                decoder = device_decoders.get(dev_type)
+                _n_dims  = int(decoded_result.get("n_dims", 0))
+                decoder  = device_decoders.get(dev_type)
                 if decoder is not None:
                     result = decoder.decode(z_full)
-                    label = result["clinical_state"]
-                    _conf = result["confidence"]
-                    decode_confidence_sum += _conf
+                    label  = result["clinical_state"]
+                    _conf  = result["confidence"]
+                    decode_confidence_sum   += _conf
                     decode_confidence_count += 1
+                    drain_log_writer.writerow([
+                        round(recv_time, 6), device_id, dev_type,
+                        seq, _n_dims, label, round(_conf, 4),
+                    ])
                 else:
                     label = str(decoded_result.get("label", "NORMAL")).strip().upper()
+                    drain_log_writer.writerow([
+                        round(recv_time, 6), device_id, dev_type,
+                        seq, _n_dims, label, "",
+                    ])
+                drain_log_file.flush()
                 # Store latest z for this device for ward_controller forwarding
                 _last_z[device_id] = {"device_type": dev_type, "z": list(z_full)}
             # else: label already set by legacy parsing path above
@@ -508,6 +529,8 @@ except KeyboardInterrupt:
 finally:
     telemetry_file.flush()
     telemetry_file.close()
+    drain_log_file.flush()
+    drain_log_file.close()
     sock.close()
     ward_sock.close()
 

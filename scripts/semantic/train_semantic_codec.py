@@ -80,8 +80,8 @@ LABEL_INDEX:   Dict[str, int] = {c: i for i, c in enumerate(LABEL_CLASSES)}
 LATENT_DIM: int = 16
 
 WINDOW_SIZES: Dict[str, int] = {
-    "ECG":           200,
-    "BloodPressure": 200,
+    "ECG":           25,
+    "BloodPressure": 25,
     "SpO2":          10,
     "Respiration":   10,
     "Temperature":   4,
