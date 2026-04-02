@@ -284,9 +284,10 @@ def ml_predict_series(cl_tel: pd.DataFrame, model_path: str) -> Optional[pd.Seri
 
         feat = _build_feature_row(curr, history)
         if feat_names:
-            vector = [[feat.get(n, 0.0) for n in feat_names]]
+            vector = pd.DataFrame([[feat.get(n, 0.0) for n in feat_names]], columns=feat_names)
         else:
-            vector = [[feat[k] for k in sorted(feat)]]
+            cols = sorted(feat)
+            vector = pd.DataFrame([[feat[k] for k in cols]], columns=cols)
 
         try:
             raw = model.predict(vector)[0]
