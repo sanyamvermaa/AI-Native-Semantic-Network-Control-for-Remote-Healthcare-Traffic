@@ -103,6 +103,16 @@ def _ensure(d: str) -> str:
     return d
 
 
+def semantic_critical_sla_pct(commands: pd.DataFrame) -> Optional[float]:
+    """Return percent of SEMANTIC_CRITICAL commands within SLA, or None if unavailable."""
+    if commands.empty or "latency_ms" not in commands.columns or "command" not in commands.columns:
+        return None
+    sc = commands[commands["command"] == "SEMANTIC_CRITICAL"]["latency_ms"].dropna()
+    if len(sc) == 0:
+        return None
+    return float(np.mean(sc <= SLA_MS)) * 100.0
+
+
 # ---------------------------------------------------------------------------
 # STEP 1 — Load and align data
 # ---------------------------------------------------------------------------
@@ -313,13 +323,16 @@ def compute_cell_metrics(df: pd.DataFrame) -> pd.DataFrame:
             if cell.empty:
                 continue
 
-            # --- Window-level aggregation (worst-case label per 250ms bucket) ---
+            # --- Window-level aggregation — encoded packets only ---
+            enc_cell = cell[cell["encoded"] == True]
             win_agg = (
-                cell.groupby("_win_key")
+                enc_cell.groupby("_win_key")
                 .agg(
                     true_label=("label", _worst_label),
                     dec_label=("decoded_label", _worst_label),
                 )
+                if not enc_cell.empty
+                else pd.DataFrame(columns=["true_label", "dec_label"])
             )
 
             true_labels = win_agg["true_label"].tolist()
@@ -617,9 +630,10 @@ def print_and_save_summary(
     emit("  Semantic Fidelity Summary Report")
     emit("=" * 62)
 
-    # Overall F1 — computed at 250ms-window level (worst-case label per window)
-    if not df_all.empty and "label" in df_all.columns and "decoded_label" in df_all.columns:
-        df_win = df_all.copy()
+    # Overall F1 — encoded packets only, aggregated at 250ms-window level
+    enc_all = df_all[df_all["encoded"] == True] if "encoded" in df_all.columns else df_all
+    if not enc_all.empty and "label" in enc_all.columns and "decoded_label" in enc_all.columns:
+        df_win = enc_all.copy()
         df_win["_win_key"] = (df_win["timestamp"] // 0.25).astype("int64")
         win_agg_all = (
             df_win.groupby("_win_key")
@@ -716,6 +730,14 @@ def main() -> None:
         ),
         help="Directory to write figures and summary_report.txt",
     )
+    parser.add_argument(
+        "--enforce-sla", action="store_true",
+        help="Fail with non-zero exit code when SEMANTIC_CRITICAL SLA is below threshold.",
+    )
+    parser.add_argument(
+        "--min-sla-pct", type=float, default=95.0,
+        help="Minimum required SEMANTIC_CRITICAL SLA compliance percentage for --enforce-sla.",
+    )
     args = parser.parse_args()
 
     logs_dir   = args.logs_dir
@@ -764,6 +786,22 @@ def main() -> None:
     # --- Summary ---
     print("\n[STEP 5] Summary:")
     print_and_save_summary(cells, df_merged, df_cmds, output_dir)
+
+    if args.enforce_sla:
+        sla_pct = semantic_critical_sla_pct(df_cmds)
+        if sla_pct is None:
+            print("[SLA ENFORCEMENT] FAIL: no SEMANTIC_CRITICAL latency samples found.")
+            raise SystemExit(2)
+        if sla_pct < args.min_sla_pct:
+            print(
+                "[SLA ENFORCEMENT] FAIL: "
+                f"SEMANTIC_CRITICAL SLA {sla_pct:.1f}% < required {args.min_sla_pct:.1f}%"
+            )
+            raise SystemExit(2)
+        print(
+            "[SLA ENFORCEMENT] PASS: "
+            f"SEMANTIC_CRITICAL SLA {sla_pct:.1f}% >= required {args.min_sla_pct:.1f}%"
+        )
 
 
 if __name__ == "__main__":

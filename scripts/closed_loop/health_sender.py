@@ -135,7 +135,9 @@ DEVICE_PROFILES: Dict[str, Dict] = {
 
 CLINICAL_THRESHOLDS: Dict[str, Dict] = {
     "ECG":           {"warn": 100, "critical": 130, "low_warn": 50,  "low_critical": 40},
-    "SpO2":          {"warn": 94,  "critical": 90,  "low_warn": None, "low_critical": None},
+    # SpO2: danger is LOW values only — below 94% is warning, below 90% is critical.
+    # warn/critical are None because 100% SpO2 is fine — no upper danger bound.
+    "SpO2":          {"warn": None, "critical": None, "low_warn": 94, "low_critical": 90},
     "BloodPressure": {"warn": 140, "critical": 160, "low_warn": 90,  "low_critical": 80},
     "Temperature":   {"warn": 376, "critical": 385, "low_warn": 355, "low_critical": 350},
     "Respiration":   {"warn": 22,  "critical": 28,  "low_warn": 8,   "low_critical": 5},
@@ -161,6 +163,22 @@ LOG_FLUSH_INTERVAL  = 1.0   # seconds between log file flushes
 STATS_FLUSH_INTERVAL = 1.0  # seconds between stats file flushes
 MIN_INTERVAL        = 0.002 # hard floor on transmission interval (500 Hz max)
 
+# Devices that have trained semantic encoder/decoder models.
+# SpO2, Temperature, Respiration have no trained models — they stay raw-only.
+SEMANTIC_CAPABLE_TYPES: frozenset = frozenset({"ECG", "BloodPressure"})
+
+# Per-device SemanticBuffer window sizes (number of samples to accumulate).
+# ECG/BP at 100 Hz: 200 samples = 2 s of context, matching the codec window.
+# SpO2/Respiration at 1 Hz: 30 samples = 30 s.
+# Temperature at 1/30 Hz: 4 samples = 2 minutes.
+SEMANTIC_BUFFER_WINDOWS: Dict[str, int] = {
+    "ECG":           200,
+    "BloodPressure": 200,
+    "SpO2":           30,
+    "Temperature":     4,
+    "Respiration":    30,
+}
+
 
 # ---------------------------------------------------------------------------
 # SemanticBuffer
@@ -169,7 +187,7 @@ MIN_INTERVAL        = 0.002 # hard floor on transmission interval (500 Hz max)
 class SemanticBuffer:
     """
     Accumulates raw samples and supports:
-      - clinical_importance()    : score 0.0–1.0 for a single reading
+      - clinical_importance()    : continuous score 0.0–1.0 for a single reading
       - should_transmit_delta()  : true if value changed enough to warrant sending
       - get_semantic_summary()   : compress window into min/max/mean/trend packet
     """
@@ -177,35 +195,66 @@ class SemanticBuffer:
     def __init__(self, device_type: str, window: int = 20) -> None:
         self.device_type = device_type
         self.window = window
-        self.buffer: Deque[int] = collections.deque(maxlen=window)
-        self.last_transmitted_value: Optional[int] = None
+        self.buffer: Deque[float] = collections.deque(maxlen=window)
+        self.last_transmitted_value: Optional[float] = None
         self.thresholds = CLINICAL_THRESHOLDS.get(device_type, {})
 
-    def clinical_importance(self, value: int) -> float:
-        """Return 0.2 (normal) | 0.7 (warn) | 1.0 (critical)."""
+    def clinical_importance(self, value: float) -> float:
+        """
+        Return a continuous importance score in [0.0, 1.0].
+
+        Piecewise linear interpolation:
+          deep normal                 → 0.2
+          normal ← → low_warn/warn   → interpolated 0.2 → 0.7
+          low_warn/warn ← → critical → interpolated 0.7 → 1.0
+          at or beyond critical       → 1.0
+        """
         hi_crit = self.thresholds.get("critical")
         hi_warn = self.thresholds.get("warn")
         lo_crit = self.thresholds.get("low_critical")
         lo_warn = self.thresholds.get("low_warn")
 
+        # High-side critical
         if hi_crit is not None and value >= hi_crit:
             return 1.0
+        # Low-side critical
         if lo_crit is not None and value <= lo_crit:
             return 1.0
-        if hi_warn is not None and value >= hi_warn:
-            return 0.7
-        if lo_warn is not None and value <= lo_warn:
-            return 0.7
+        # High-side: between warn and critical → interpolate 0.7 → 1.0
+        if hi_crit is not None and hi_warn is not None and value >= hi_warn:
+            span = max(hi_crit - hi_warn, 1e-9)
+            return 0.7 + 0.3 * (value - hi_warn) / span
+        # Low-side: between low_crit and low_warn → interpolate 0.7 → 1.0
+        if lo_crit is not None and lo_warn is not None and value <= lo_warn:
+            span = max(lo_warn - lo_crit, 1e-9)
+            return 0.7 + 0.3 * (lo_warn - value) / span
+        # High-side: approaching warn from normal → interpolate 0.2 → 0.7
+        if hi_warn is not None:
+            # Use center of normal range as the 0.2 anchor
+            normal_center = (self.thresholds.get("low_warn") or 0)
+            normal_center = (normal_center + hi_warn) / 2.0
+            span = max(hi_warn - normal_center, 1e-9)
+            if value > normal_center:
+                frac = min(1.0, (value - normal_center) / span)
+                return 0.2 + 0.5 * frac
+        # Low-side: approaching low_warn from normal → interpolate 0.2 → 0.7
+        if lo_warn is not None:
+            normal_center_lo = (self.thresholds.get("warn") or lo_warn) if self.thresholds.get("warn") else lo_warn
+            normal_center_lo = (lo_warn + normal_center_lo) / 2.0
+            span = max(normal_center_lo - lo_warn, 1e-9)
+            if value < normal_center_lo:
+                frac = min(1.0, (normal_center_lo - value) / span)
+                return 0.2 + 0.5 * frac
         return 0.2
 
-    def push(self, value: int) -> None:
+    def push(self, value: float) -> None:
         self.buffer.append(value)
 
-    def should_transmit_delta(self, value: int, threshold_pct: float = 0.05) -> bool:
+    def should_transmit_delta(self, value: float, threshold_pct: float = 0.05) -> bool:
         """True if value changed by >= threshold_pct relative to last transmitted."""
         if self.last_transmitted_value is None:
             return True
-        baseline = max(1, abs(self.last_transmitted_value))
+        baseline = max(1e-9, abs(self.last_transmitted_value))
         return abs(value - self.last_transmitted_value) / baseline >= threshold_pct
 
     def get_semantic_summary(self) -> Dict[str, object]:
@@ -214,23 +263,38 @@ class SemanticBuffer:
         if not vals:
             return {}
 
-        first, last = vals[0], vals[-1]
-        if last > first * 1.03:
-            trend = "RISING"
-        elif last < first * 0.97:
-            trend = "FALLING"
+        hi_crit = self.thresholds.get("critical")
+        lo_crit = self.thresholds.get("low_critical")
+
+        # Spike detection: any sample exceeds a critical threshold mid-window
+        spike = False
+        if hi_crit is not None and any(v >= hi_crit for v in vals):
+            spike = True
+        if lo_crit is not None and any(v <= lo_crit for v in vals):
+            spike = True
+
+        if spike:
+            trend = "SPIKE"
         else:
-            trend = "STABLE"
+            first, last = vals[0], vals[-1]
+            if last > first * 1.03:
+                trend = "RISING"
+            elif last < first * 0.97:
+                trend = "FALLING"
+            else:
+                trend = "STABLE"
 
         peak = max(vals, key=self.clinical_importance)
+        peak_imp = self.clinical_importance(peak)
         return {
-            "semantic":   True,
-            "min":        min(vals),
-            "max":        max(vals),
-            "mean":       round(sum(vals) / len(vals), 1),
-            "trend":      trend,
-            "n_samples":  len(vals),
-            "importance": self.clinical_importance(peak),
+            "semantic":        True,
+            "min":             min(vals),
+            "max":             max(vals),
+            "mean":            round(sum(vals) / len(vals), 2),
+            "trend":           trend,
+            "n_samples":       len(vals),
+            "importance":      round(peak_imp, 3),
+            "peak_importance": round(peak_imp, 3),
         }
 
 
@@ -288,14 +352,14 @@ class PhysiologicalModel:
             else (self.normal_lo + self.normal_hi) / 2.0
         )
 
-    def step(self) -> int:
-        """Advance one dt and return the next integer vital value."""
+    def step(self) -> float:
+        """Advance one dt and return the next vital value as a float."""
         dt = self.interval
         self._x += (
             self.theta * (self._mu - self._x) * dt
             + self.sigma * math.sqrt(dt) * random.gauss(0.0, 1.0)
         )
-        return int(round(self._x))
+        return self._x
 
 
 # ---------------------------------------------------------------------------
@@ -322,8 +386,9 @@ class ECGNeuroKitSource:
         self._ou = PhysiologicalModel("ECG", (60, 100), (110, 150), 1.0 / self._SR)
         self._ou._x  = base_hr
         self._ou._mu = base_hr
-        self._hr_series: List[int] = []
+        self._hr_series: List[float] = []
         self._pos = 0
+        self._last_burst: bool = False
         self._refill()
 
     def _refill(self) -> None:
@@ -350,16 +415,23 @@ class ECGNeuroKitSource:
                 for i, rp in enumerate(r_peaks[:-1]):
                     nxt = r_peaks[i + 1]
                     hr_per_sample[rp:nxt] = hr_beats[i]
-                self._hr_series = [int(round(v)) for v in hr_per_sample]
+                self._hr_series = list(hr_per_sample.astype(float))
             else:
-                self._hr_series = [int(round(target_hr))] * (self._DURATION * self._SR)
+                self._hr_series = [float(target_hr)] * (self._DURATION * self._SR)
         except Exception:
             # Graceful fallback: flat HR series at current OU value
-            self._hr_series = [int(round(target_hr))] * (self._DURATION * self._SR)
+            self._hr_series = [float(target_hr)] * (self._DURATION * self._SR)
 
         self._pos = 0
 
-    def step(self, burst_active: bool) -> int:
+    def step(self, burst_active: bool) -> float:
+        # If burst state changed, flush the pre-generated buffer so _refill() is
+        # triggered immediately with the new target HR instead of waiting up to
+        # _DURATION seconds for the old buffer to drain.
+        if burst_active != self._last_burst:
+            self._last_burst = burst_active
+            self._pos = len(self._hr_series)   # force _refill on next line
+
         # Let OU advance the long-term mean HR (drives next buffer's target)
         self._ou.set_burst(burst_active)
         self._ou.step()
@@ -394,13 +466,13 @@ def build_payload(
 
     if mode == "RAW":
         sem_buffer.last_transmitted_value = value
-        return f"{device_id},{seq},{now:.6f},{device_type},{value},{label}".ljust(64).encode("utf-8")
+        return f"{device_id},{seq},{now:.6f},{device_type},{value:.2f},{label}".ljust(64).encode("utf-8")
 
     if mode == "DELTA":
         if not sem_buffer.should_transmit_delta(value, threshold_pct=0.05):
             return None   # value unchanged — suppress
         sem_buffer.last_transmitted_value = value
-        return f"{device_id},{seq},{now:.6f},{device_type},{value},{label}".ljust(64).encode("utf-8")
+        return f"{device_id},{seq},{now:.6f},{device_type},{value:.2f},{label}".ljust(64).encode("utf-8")
 
     if mode == "SUMMARY":
         # Buffer fullness is not strictly required, but emit nothing until
@@ -444,6 +516,12 @@ def main() -> None:
     parser.add_argument("--base-dir",             type=str, default=default_base_dir())
     parser.add_argument("--control-ip",           type=str, default="0.0.0.0")
     parser.add_argument("--control-base-port",    type=int, default=6000)
+    parser.add_argument("--ward-ack-ip",          type=str, default=os.getenv("WARD_CONTROLLER_IP", "10.0.0.1"))
+    parser.add_argument("--ward-ack-port",        type=int, default=int(os.getenv("WARD_CONTROLLER_PORT", "5006")))
+    parser.add_argument("--correlated-burst-file", type=str, default="",
+                        help="Path to a sentinel file; if it exists and is <5s old, "
+                             "force a correlated burst regardless of per-device probability. "
+                             "Touch this file from a stress script to simulate multi-organ events.")
     parser.add_argument("--initial-command",      type=str, default="FULL_ECG",
                         choices=list(COMMAND_SEMANTIC_MAP.keys()),
                         help="Starting transmission command before first ward_controller message")
@@ -480,12 +558,18 @@ def main() -> None:
     # --- Sockets ---
     tx_sock  = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     receiver = (args.receiver_ip, args.receiver_port)
+    ack_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    ack_target = (args.ward_ack_ip, args.ward_ack_port)
 
     ctrl_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     ctrl_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     ctrl_port = args.control_base_port + args.device_id
     ctrl_sock.bind((args.control_ip, ctrl_port))
     ctrl_sock.setblocking(False)
+    try:
+        ctrl_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 512 * 1024)
+    except OSError:
+        pass
 
     # --- Open log files once (not per packet) ---
     log_f  = open(log_file,   "w", newline="", encoding="utf-8")
@@ -516,8 +600,13 @@ def main() -> None:
     current_interval = max(MIN_INTERVAL, profile["interval"] * _init_mult)
     summary_interval  = profile["summary_interval"]   # time-gate for SUMMARY mode
     last_summary_emit = 0.0
+    last_command_time = time.time()
+    command_timeout_s = 30.0
 
-    sem_buffer = SemanticBuffer(args.device_type, window=20)
+    sem_buffer = SemanticBuffer(
+        args.device_type,
+        window=SEMANTIC_BUFFER_WINDOWS.get(args.device_type, 30),
+    )
 
     # Semantic encoder (ML-based codec; None when _SEMANTIC_AVAILABLE is False or models absent)
     _repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -573,7 +662,24 @@ def main() -> None:
                     msg = json.loads(data.decode("utf-8", errors="replace"))
                     if not isinstance(msg, dict):
                         continue
+                    last_command_time = now
                     new_command = str(msg.get("command") or current_command)
+
+                    # ACK command receptions so ward_controller can retry only when needed.
+                    cmd_id = msg.get("command_id")
+                    if cmd_id is not None:
+                        try:
+                            ack_packet = {
+                                "type": "command_ack",
+                                "device_id": args.device_id,
+                                "command_id": int(cmd_id),
+                                "command": new_command,
+                                "timestamp": round(now, 6),
+                            }
+                            ack_sock.sendto(json.dumps(ack_packet).encode("utf-8"), ack_target)
+                        except Exception:
+                            pass
+
                     if new_command != current_command:
                         current_command = new_command
                         tx_mode, multiplier = COMMAND_SEMANTIC_MAP.get(current_command, ("RAW", 1.0))
@@ -592,9 +698,32 @@ def main() -> None:
             except Exception:
                 pass
 
+            # Safety fallback: if no control command arrives for a while, return to FULL_ECG.
+            if now - last_command_time > command_timeout_s and current_command != "FULL_ECG":
+                current_command = "FULL_ECG"
+                tx_mode, multiplier = COMMAND_SEMANTIC_MAP.get(current_command, ("RAW", 1.0))
+                current_interval = max(MIN_INTERVAL, profile["interval"] * multiplier)
+                last_command_time = now
+                print(
+                    f"[WATCHDOG] dev={args.device_id} no command for {command_timeout_s:.0f}s; "
+                    f"reverting to {current_command}"
+                )
+
             # --- Burst logic: check end BEFORE assigning value ---
             if burst_mode and now > burst_end_time:
                 burst_mode = False
+
+            # Correlated burst: if the sentinel file exists and is fresh (<5s),
+            # force burst on this device regardless of its individual probability.
+            _corr_file = getattr(args, "correlated_burst_file", "")
+            if not burst_mode and _corr_file:
+                try:
+                    _mtime = os.path.getmtime(_corr_file)
+                    if now - _mtime < 5.0:
+                        burst_mode     = True
+                        burst_end_time = now + profile["burst_dur"]
+                except OSError:
+                    pass  # file not present — no correlated burst
 
             if not burst_mode and random.random() < profile["burst_prob"]:
                 burst_mode     = True
@@ -630,33 +759,46 @@ def main() -> None:
                 should_attempt      = True
                 is_intentional_skip = False
 
-            # --- Semantic encoder fast-path (SUMMARY / CRITICAL_ONLY modes only) ---
+            # --- Semantic encoder fast-path (ECG + BloodPressure only) ---
             # push every tick so the buffer fills up regardless of transmission gating
             used_sem_encoder = False
-            if sem_encoder is not None:
+            if sem_encoder is not None and args.device_type in SEMANTIC_CAPABLE_TYPES:
                 sem_encoder.push(float(value))
                 if should_attempt and current_command.startswith("SEMANTIC_") and sem_encoder.ready:
-                    z = sem_encoder.encode()
-                    if z is not None:
-                        sem_payload = encode_payload(
-                            device_id   = args.device_id,
-                            seq         = tx_seq + 1,
-                            ts          = now,
-                            device_type = args.device_type,
-                            z           = z,
-                            command     = current_command,
-                            label       = label,
-                        )
-                        if sem_payload is not None:
-                            try:
-                                tx_sock.sendto(sem_payload, receiver)
-                                tx_seq += 1
-                                mode_counters[tx_mode]["sent"] += 1
-                                if tx_mode == "SUMMARY":
-                                    last_summary_emit = now
-                            except Exception:
-                                pass
-                            used_sem_encoder = True
+                    # SEMANTIC_CRITICAL mirrors the CRITICAL_ONLY raw logic:
+                    # only transmit (even as a compressed z) when the reading is
+                    # clinically significant.  Sending z for a perfectly normal
+                    # patient under a CRITICAL-severity command wastes bandwidth
+                    # and contradicts the suppression intent of the mode.
+                    _importance = sem_buffer.clinical_importance(value)
+                    _suppress_critical = (
+                        current_command == "SEMANTIC_CRITICAL" and _importance < 0.7
+                    )
+                    if _suppress_critical:
+                        mode_counters[tx_mode]["suppressed"] += 1
+                        used_sem_encoder = True   # block legacy path from double-counting
+                    else:
+                        z = sem_encoder.encode()
+                        if z is not None:
+                            sem_payload = encode_payload(
+                                device_id   = args.device_id,
+                                seq         = tx_seq + 1,
+                                ts          = now,
+                                device_type = args.device_type,
+                                z           = z,
+                                command     = current_command,
+                                label       = label,
+                            )
+                            if sem_payload is not None:
+                                try:
+                                    tx_sock.sendto(sem_payload, receiver)
+                                    tx_seq += 1
+                                    mode_counters[tx_mode]["sent"] += 1
+                                    if tx_mode == "SUMMARY":
+                                        last_summary_emit = now
+                                except Exception:
+                                    pass
+                                used_sem_encoder = True
 
             # --- Build and send payload (legacy path when sem encoder not used) ---
             payload: Optional[bytes] = None
@@ -715,6 +857,7 @@ def main() -> None:
         log_f.close()
         stat_f.close()
         tx_sock.close()
+        ack_sock.close()
         ctrl_sock.close()
 
 

@@ -533,9 +533,18 @@ def dashboard_html() -> str:
         const r = await fetch("/api/telemetry", { cache: "no-store" });
         if (!r.ok) throw new Error("telemetry");
         const d = await r.json();
+        const rowCount = (d.packet_loss_rate || []).length;
         if (!chartSeeded) {
-          seedChartsFromHistory(d);
-          chartSeeded = true;
+          if (rowCount > 0) {
+            // First successful fetch with real data — seed charts from history.
+            seedChartsFromHistory(d);
+            chartSeeded = true;
+          }
+          // rowCount === 0 means experiment hasn't started; stay unseeded.
+        } else if (rowCount === 0) {
+          // Data disappeared — experiment likely restarted (CSV deleted/recreated).
+          // Re-arm seeding so the next non-empty response seeds fresh history.
+          chartSeeded = false;
         }
         const cur = d.current || {};
         updateMetric("packet_loss_rate", cur.packet_loss_rate || 0, "%");

@@ -922,6 +922,24 @@ def generate_summary_report(
                 lines.append(f"  {mode.upper():<18}  {ms:>10,}  {msp:>12,}")
     lines.append("")
 
+    # 3b. Suppression-equivalent bandwidth saving
+    section("3b. Suppression-Equivalent Bandwidth Saving")
+    if not cl_stats.empty and not b_stats.empty:
+        cl_latest = _latest_stats_per_device(cl_stats)
+        b_latest  = _latest_stats_per_device(b_stats)
+        cl_tx = int(cl_latest["total_sent"].sum())
+        b_tx  = int(b_latest["total_sent"].sum())
+        if b_tx > 0:
+            bw_saving_pct = (1.0 - cl_tx / b_tx) * 100.0
+            lines.append(f"  CL transmitted packets  : {cl_tx:>10,}")
+            lines.append(f"  Baseline transmitted    : {b_tx:>10,}")
+            lines.append(f"  Bandwidth saving        : {bw_saving_pct:>9.1f}%")
+        else:
+            lines.append("  Insufficient data for bandwidth saving calculation.")
+    else:
+        lines.append("  No suppression stats available.")
+    lines.append("")
+
     # 4. Adaptation latency
     section("4. Adaptation Latency")
     if not cmd_log.empty and "latency_ms" in cmd_log.columns:

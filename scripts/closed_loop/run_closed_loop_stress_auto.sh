@@ -110,6 +110,13 @@ apply_profile() {
 
     apply_netem "$loss" "$delay" "$jitter"
     echo "[STRESS] profile=${profile} loss=${loss}% delay=${delay}ms jitter=${jitter}ms" | tee -a "${STRESS_LOG}"
+
+    # Touch the burst sentinel so all senders trigger a correlated clinical
+    # event when the network enters Critical (multi-organ stress simulation).
+    if [[ "$profile" == "Critical" ]]; then
+        touch "${DATA_DIR}/burst.sentinel"
+        echo "[STRESS] burst sentinel touched: ${DATA_DIR}/burst.sentinel" | tee -a "${STRESS_LOG}"
+    fi
 }
 
 cleanup() {
@@ -207,6 +214,7 @@ for dev in "${DEVICES[@]}"; do
         --receiver-ip "10.0.0.2" \
         --receiver-port "9000" \
         --base-dir "${DATA_DIR}" \
+        --correlated-burst-file "${DATA_DIR}/burst.sentinel" \
         > "${RUN_DIR}/sender_${dev_id}_${dev_type}.log" 2>&1 &
 
     echo "$!" >> "${SENDER_PID_FILE}"

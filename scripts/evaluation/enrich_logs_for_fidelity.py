@@ -48,7 +48,7 @@ from channel_quantizer import quantize, dequantize  # noqa: E402
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-WINDOW_SIZE = 25       # rows per window — must match metadata.json window_size
+WINDOW_SIZE = 200      # rows per window — must match metadata.json window_size
 LATENT_DIM  = 16
 
 # Devices to process: (device_id, device_type)
@@ -92,9 +92,9 @@ _LATENCY_COND_EXTRA: Dict[str, float] = {
 }
 
 # Telemetry stride: write one telemetry row every N packets within a window.
-# At 100 Hz (dt=0.01 s), stride=25 → 0.25 s between telemetry rows.
-# merge_asof tolerance=0.3 s → every packet is within 0.125 s of a tele row.
-TELE_STRIDE = 25
+# At 100 Hz (dt=0.01 s), stride=50 → 0.5 s between telemetry rows.
+# merge_asof tolerance=0.6 s → every packet is within 0.25 s of a tele row.
+TELE_STRIDE = 50   # one telemetry row per 0.5 s (200-sample window / 4)
 
 LABEL_CLASSES = ["NORMAL", "ALERT", "CRITICAL"]
 # Severity rank: higher = worse

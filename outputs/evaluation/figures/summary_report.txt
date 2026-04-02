@@ -27,6 +27,11 @@
   DELTA                       46         3,506
   CRITICAL_ONLY           39,063        20,974
 
+── 3b. Suppression-Equivalent Bandwidth Saving ─────────────────────
+  CL transmitted packets  :     44,949
+  Baseline transmitted    :     69,754
+  Bandwidth saving        :      35.6%
+
 ── 4. Adaptation Latency ───────────────────────────────────────────
   Median  (p50) :     504 ms
   p75           :    1065 ms

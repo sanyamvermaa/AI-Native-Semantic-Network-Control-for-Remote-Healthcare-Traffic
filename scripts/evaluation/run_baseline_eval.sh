@@ -180,7 +180,7 @@ done
 sleep 2
 
 # Profile sequence — same as closedloop script to guarantee identical stress exposure
-declare -a PROFILE_SEQUENCE=("Stable" "Unstable" "Critical" "Unstable" "Stable" "Critical")
+declare -a PROFILE_SEQUENCE=("Stable" "Stable" "Unstable" "Unstable" "Critical" "Critical")
 
 (
     while true; do

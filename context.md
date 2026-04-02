@@ -288,3 +288,68 @@ packets lower weighted F1. This is the intentional semantic compression tradeoff
 - Keep all new closed-loop logic inside scripts/closed_loop.
 - All semantic training and evaluation commands run under WSL Python 3.12.3 with PyTorch 2.11.0+cu130 (CUDA available).
 - Run all commands from the project root directory.
+
+---
+
+## Known Limitations — Cannot Be Code-Fixed
+
+The following limitations require infrastructure, external tooling, or are by design. They are
+documented here so reviewers and future contributors understand the constraints without treating
+them as open bugs.
+
+### #6 — No real hardware; synthetic OU physiology only
+The `PhysiologicalModel` class uses an Ornstein–Uhlenbeck mean-reverting stochastic process.
+This is statistically realistic but cannot replicate genuine patient pathophysiology (e.g.,
+arrhythmia morphology, Cheyne–Stokes respiration). Real deployment would replace this stub with
+hardware sensor drivers over USB/BLE. No code change can substitute for physical devices.
+
+### #12 — Single-machine loopback; no true multi-hop wireless path
+Network namespaces (`sender_ns` / `receiver_ns`) emulate a two-node topology over loopback.
+Real remote-healthcare traffic would traverse cellular or Wi-Fi links with path-asymmetric delay,
+spatial RF fading, and handover events. These network properties cannot be reproduced inside a
+single host without physical radio hardware or a full network emulator (e.g., Mininet + TC).
+
+### #15 — `tc netem` parameters are fixed at experiment start
+Congestion is injected once via `scripts/setup_namespaces.sh`. The closed-loop system reacts to
+measured RTT/loss but cannot reprogram `netem` at runtime without root + a privileged subprocess
+bridge. Adding dynamic `tc netem` changes mid-experiment is a deployment decision contingent on
+the production OS security model.
+
+### #16 — Semantic codec trained only on ECG and BloodPressure
+Devices reporting SpO2, Temperature, and Respiration bypass the semantic encoder/decoder pipeline
+(`SEMANTIC_CAPABLE_TYPES = {"ECG", "BloodPressure"}`). Training separate codecs for those
+modalities requires curated segment-level datasets with matching ground-truth windows — data that
+is not available in this repository. See `scripts/semantic/train_semantic_codec.py` for the
+training workflow to extend coverage when data becomes available.
+
+### #20 — No inter-device bandwidth fairness scheduling
+The ward controller issues per-device mode commands but does not enforce an explicit bandwidth
+allocation or fair-queuing policy across all concurrent devices. Fair scheduling (e.g., weighted
+max–min) would require a central admission control layer aware of the total link capacity —
+outside the current single-UDP-socket architecture.
+
+### #21 — PHY/MAC layer not modelled
+The system operates at the UDP application layer. There is no 802.11 or LTE MAC model, so
+phenomena such as CSMA/CA backoff, RTS/CTS collisions, or HARQ retransmissions are absent.
+These effects are relevant in dense IoT deployments and must be addressed at the physical
+infrastructure level.
+
+### #23 — No patient context carried with semantic payloads
+The semantic encoder compresses a raw signal window into a 16-dimensional latent vector. The
+transmitted payload does not include patient demographics, prior health history, or inter-session
+context that could improve decoding accuracy or alarm thresholds. Incorporating patient context
+would require a privacy-preserving longitudinal data store and is out of scope for a network
+control prototype.
+
+### #25 — No cryptographic authentication (HMAC / TLS)
+UDP packets are unsigned. An adversary on the same LAN segment could inject forged telemetry or
+replay packets to manipulate alarm states. Adding HMAC-SHA256 per packet or upgrading to DTLS
+requires key management infrastructure and is deferred to a production hardening phase. **No
+sensitive patient data is transmitted in the current evaluation environment.**
+
+### #28 — Ward controller decisions are rule-based, not learned
+`ward_controller.py` applies static threshold rules derived from the network state labels
+(Stable / Unstable / Critical). A reinforcement-learning or model-predictive controller that
+learns optimal mode-switching policies from interaction experience would improve performance but
+requires a simulation harness with reward shaping — a separate research contribution beyond this
+prototype.

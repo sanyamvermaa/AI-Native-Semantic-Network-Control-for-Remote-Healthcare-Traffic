@@ -402,20 +402,20 @@ class SemanticDecoder(nn.Module):
 
 def apply_channel_truncation(z: torch.Tensor, training: bool) -> torch.Tensor:
     """
-    During training: simulate channel truncation by zeroing the last k
-    dimensions of the latent vector.  k is drawn uniformly from {0, 4, 8, 12}
-    (equal probability 0.25 each — the four values partition the 16 dims evenly).
-    The decoder must learn to classify reliably even with partial codes.
+    During training: simulate bandwidth-limited channel by keeping only the
+    top-k latent dimensions (by absolute magnitude).  k is drawn uniformly
+    from {4, 8, 12, 16} so the decoder learns to classify from any subset.
 
     No-op at inference (training=False).
     """
     if not training:
         return z
-    k = random.choice([0, 4, 8, 12])
-    if k == 0:
+    k = random.choice([4, 8, 12, 16])
+    if k >= z.size(-1):
         return z
-    mask = torch.ones_like(z)
-    mask[:, -k:] = 0.0
+    topk_indices = torch.topk(z.abs(), k, dim=-1).indices
+    mask = torch.zeros_like(z)
+    mask.scatter_(-1, topk_indices, 1.0)
     return z * mask
 
 # ---------------------------------------------------------------------------

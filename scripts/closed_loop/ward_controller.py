@@ -6,6 +6,7 @@ import socket
 import sys
 import time
 from pathlib import Path
+from typing import Dict, Set
 
 from common import DEVICE_LAYOUT, default_base_dir, normalize_health_state, normalize_network_state, policy_command
 
@@ -31,9 +32,11 @@ def main() -> None:
     parser.add_argument("--window-timeout", type=float, default=3.0)
     parser.add_argument("--broadcast-ip", type=str, default="127.0.0.1")
     parser.add_argument("--sender-control-base-port", type=int, default=6000)
-    parser.add_argument("--debounce-windows", type=int, default=2)
-    parser.add_argument("--min-command-interval", type=float, default=1.0)
+    parser.add_argument("--debounce-windows", type=int, default=1)
+    parser.add_argument("--min-command-interval", type=float, default=0.5)
+    parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
+    verbose = bool(args.verbose)
 
     base_dir = args.base_dir
     os.makedirs(base_dir, exist_ok=True)
@@ -78,10 +81,53 @@ def main() -> None:
     pending_command = None
     pending_count = 0
     last_emit_ts = 0.0
+    next_command_id = 1
+    ack_timeout_s = 1.0
+    ack_max_retries = 3
+    pending_acks: Dict[int, Dict[str, object]] = {}
 
     try:
         while True:
             now = time.time()
+
+            # Re-send commands that have not yet been ACKed by all target senders.
+            for cmd_id in list(pending_acks.keys()):
+                entry = pending_acks.get(cmd_id)
+                if entry is None:
+                    continue
+                pending_devices = entry.get("pending_devices")
+                if not isinstance(pending_devices, set) or len(pending_devices) == 0:
+                    pending_acks.pop(cmd_id, None)
+                    continue
+                resend_at = float(entry.get("resend_at", 0.0))
+                if now < resend_at:
+                    continue
+                retries = int(entry.get("retries", 0))
+                if retries >= ack_max_retries:
+                    print(
+                        f"[WARD ACK][WARN] command_id={cmd_id} not ACKed by devices "
+                        f"{sorted(pending_devices)} after {ack_max_retries} retries"
+                    )
+                    pending_acks.pop(cmd_id, None)
+                    continue
+
+                control = entry.get("control")
+                if not isinstance(control, dict):
+                    pending_acks.pop(cmd_id, None)
+                    continue
+
+                retry_payload = dict(control)
+                retry_payload["retry"] = retries + 1
+                encoded_retry = json.dumps(retry_payload).encode("utf-8")
+                for dev_id in list(pending_devices):
+                    try:
+                        out_sock.sendto(encoded_retry, (args.broadcast_ip, args.sender_control_base_port + int(dev_id)))
+                    except Exception:
+                        pass
+
+                entry["retries"] = retries + 1
+                entry["resend_at"] = now + ack_timeout_s
+
             try:
                 data, _ = in_sock.recvfrom(4096)
                 payload = json.loads(data.decode("utf-8", errors="replace"))
@@ -112,10 +158,33 @@ def main() -> None:
                 continue
 
             recv_ts = time.time()
+
+            if payload.get("type") == "command_ack":
+                try:
+                    cmd_id = int(payload.get("command_id"))
+                    dev_id = int(payload.get("device_id"))
+                except (TypeError, ValueError):
+                    continue
+
+                ack_entry = pending_acks.get(cmd_id)
+                if ack_entry is None:
+                    continue
+
+                ack_pending = ack_entry.get("pending_devices")
+                if isinstance(ack_pending, set) and dev_id in ack_pending:
+                    ack_pending.remove(dev_id)
+                    if len(ack_pending) == 0:
+                        pending_acks.pop(cmd_id, None)
+                        print(f"[WARD ACK] command_id={cmd_id} acknowledged by all devices")
+                continue
+
             last_packet_ts = recv_ts
 
             network_state = normalize_network_state(payload.get("network_state"))
             health_state = normalize_health_state(payload.get("health_state"))
+            receiver_overloaded = bool(payload.get("receiver_overloaded", False))
+            drain_backlog_hits = int(payload.get("drain_backlog_hits", 0) or 0)
+            drain_budget_hits = int(payload.get("drain_budget_hits", 0) or 0)
             source_ts = float(payload.get("timestamp") or recv_ts)
             transport_ms = max(0.0, (recv_ts - source_ts) * 1000.0)
             window_sec = float(payload.get("window_sec") or 0.25)
@@ -141,6 +210,14 @@ def main() -> None:
                 network_state = "Critical"
 
             command = policy_command(network_state, health_state)
+
+            if receiver_overloaded:
+                command = "SEMANTIC_SUMMARY"
+                if verbose:
+                    print(
+                        "[WARD] overload override -> SEMANTIC_SUMMARY "
+                        f"(backlog_hits={drain_backlog_hits}, budget_hits={drain_budget_hits})"
+                    )
 
             # --- Fusion-driven health state escalation ---
             if (
@@ -222,6 +299,7 @@ def main() -> None:
 
                 control = {
                     "command": command,
+                    "command_id": next_command_id,
                     "network_state": network_state,
                     "health_state": health_state,
                     "timestamp": recv_ts,
@@ -235,6 +313,16 @@ def main() -> None:
                         out_sock.sendto(encoded, (args.broadcast_ip, args.sender_control_base_port + dev_id))
                     except Exception:
                         pass
+
+                # Track ACKs for the latest command only; older commands are superseded.
+                pending_acks.clear()
+                pending_acks[next_command_id] = {
+                    "control": dict(control),
+                    "pending_devices": set(dev_id for dev_id, _ in DEVICE_LAYOUT),
+                    "retries": 0,
+                    "resend_at": recv_ts + ack_timeout_s,
+                }
+                next_command_id += 1
 
                 print(
                     f"[WARD CMD] {network_state}/{health_state} -> {command} "

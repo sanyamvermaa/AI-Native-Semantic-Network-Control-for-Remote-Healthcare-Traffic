@@ -35,5 +35,6 @@ plots/semantic_fidelity/
 # Editor scratch files
 tempCodeRunnerFile.py
 
-
+outputs/
 outputs/results
+outputs/evaluation

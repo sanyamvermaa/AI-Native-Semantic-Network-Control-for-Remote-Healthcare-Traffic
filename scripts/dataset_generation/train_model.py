@@ -49,6 +49,14 @@ except FileNotFoundError:
     print(f"[!] '{DATASETS_DIR / 'realistic_network_dataset.csv'}' not found. Run the generator first.")
     raise SystemExit(1)
 
+# The dataset-generation receiver wrote jitter/avg_delay in raw seconds.
+# The production closed-loop receiver multiplies these by 1000 before building
+# feature vectors.  Convert here so the model is trained in the same unit (ms)
+# that it will receive at inference time.
+df["jitter"]    = df["jitter"]    * 1000.0   # seconds → ms
+df["avg_delay"] = df["avg_delay"] * 1000.0   # seconds → ms
+print("[+] Converted jitter/avg_delay from seconds → ms (unit alignment fix)")
+
 print(f"    Class distribution:\n{df['network_condition'].value_counts().to_string()}\n")
 
 REQUIRED_COLS = ["active_devices", "packets_per_window", "avg_delay"]
@@ -395,5 +403,9 @@ best_name = max(scores_map, key=lambda k: scores_map[k][0])
 best_f1, best_model_obj = scores_map[best_name]
 
 joblib.dump(best_model_obj, MODELS_DIR / "best_network_model.pkl")
+import json as _json
+with open(MODELS_DIR / "label_classes.json", "w") as _lf:
+    _json.dump(list(le.classes_), _lf)
 print(f"\n🏆 Best model: {best_name} (held-out F1={best_f1:.3f})")
-print(f"   Saved → '{MODELS_DIR / 'best_network_model.pkl'}'")
+print(f"   Saved → '{MODELS_DIR / 'best_network_model.pkl'}'") 
+print(f"   Label classes → '{MODELS_DIR / 'label_classes.json'}'") 
