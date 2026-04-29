@@ -1,0 +1,16 @@
+{
+  "delay_scale": "ms",
+  "jitter_scale": "ms",
+  "trained_on": "live_telemetry_fuzzy_pipeline",
+  "trained_at": "2026-04-20T07:28:11.819300+00:00",
+  "model_type": "XGBoost",
+  "train_rows": 11190,
+  "train_accuracy": 1.0,
+  "corpus_files": 8,
+  "label_classes": [
+    "Critical",
+    "Stable",
+    "Unstable"
+  ],
+  "fuzz_pct": 0.12
+}

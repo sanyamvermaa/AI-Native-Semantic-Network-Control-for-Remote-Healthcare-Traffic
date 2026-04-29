@@ -1,0 +1,8 @@
+﻿{
+    "delay_scale":  "ms",
+    "jitter_scale":  "ms",
+    "trained_on":  "synthetic_control_dataset.csv",
+    "trained_at":  "2026-04-06T12:07:59Z",
+    "model_type":  "RandomForest",
+    "note":  "Pre-existing model; delay_scale confirmed as ms (trained on synthetic_control_dataset.csv via generate_synthetic_dataset.py)."
+}

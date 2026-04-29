@@ -6,6 +6,8 @@ Fixes the scale mismatch: old training data had avg_delay max 8ms, live data has
 """
 import sys
 import glob
+import json
+import datetime
 import numpy as np
 import pandas as pd
 import joblib
@@ -45,10 +47,15 @@ REQUIRED = ["packet_loss_rate", "avg_delay", "jitter",
             "throughput_bps", "bandwidth_usage_bps",
             "active_devices", "packets_per_window", "timestamp"]
 
-# Files to hold out as the evaluation set (not included in training)
+# Files to hold out as the evaluation set (not included in training).
+# We also explicitly hold out ANY closed-loop run as a broad rule, because 
+# adaptive suppression (closed-loop) alters the network statistics itself, 
+# corrupting the raw network baseline the model is supposed to learn from.
 HOLDOUT_STEMS = {
     "baseline_natural_20260401_183044",   # Run 1 baseline
+    "baseline_natural_20260415_051333",   # Sample holdout eval
     "closedloop_natural_20260401_184214", # Run 1 closedloop
+    "closedloop_natural_20260415_054221", # Recent closedloop eval
 }
 
 frames = []
@@ -61,8 +68,12 @@ for f in files:
             print(f"  [skip] {f}  (delay max {df.avg_delay.max():.1f}ms — synthetic scale)")
             continue
         stem = Path(f).parent.name
-        if stem in HOLDOUT_STEMS:
-            print(f"  [hold] {stem}  (held out for evaluation)")
+        
+        # Hold out closed-loop runs universally because closed-loop suppresses traffic, 
+        # which changes bandwidth, altering the raw problem distribution. We want the 
+        # model trained purely on unadapted interference (baselines).
+        if stem in HOLDOUT_STEMS or "closedloop" in stem:
+            print(f"  [hold] {stem}  (held out for evaluation / closedloop corruption avoidance)")
             continue
         df["network_condition"] = df.apply(heuristic, axis=1)
         frames.append(df)
@@ -184,3 +195,16 @@ for name, row in [("stable", stable_row), ("unstable", unstable_row), ("critical
 out = MODELS_DIR / "xgboost_network_model.pkl"
 joblib.dump(clf, out)
 print(f"\n[OK] Saved → {out}")
+
+# Write a metadata sidecar so health_receiver.py can verify this model was
+# trained on ms-scale data and will not be misused with a seconds-scale model.
+_meta = {
+    "delay_scale": "ms",
+    "jitter_scale": "ms",
+    "trained_on": "live_telemetry",
+    "trained_at": datetime.datetime.utcnow().isoformat() + "Z",
+    "model_type": "XGBoost",
+}
+with open(out.with_suffix(".json"), "w") as _mf:
+    json.dump(_meta, _mf, indent=2)
+print(f"[OK] Scale metadata → {out.with_suffix('.json')}")

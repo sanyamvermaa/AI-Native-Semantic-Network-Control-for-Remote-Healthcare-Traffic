@@ -202,6 +202,51 @@ def decode_model_prediction(raw_pred) -> str:
     return "Critical"
 
 
+def _check_model_scale(path: Path) -> None:
+    """Verify the model's JSON metadata sidecar declares ms-scale delay/jitter.
+
+    The original realistic_network_dataset.csv stored avg_delay and jitter in
+    *seconds*.  health_receiver.py converts its raw timing values to milliseconds
+    before inference (avg_delay * 1000.0).  A model trained on the un-converted
+    seconds-scale CSV will therefore receive features that are 1000× too large
+    and will misclassify nearly every window.  The metadata sidecar written by
+    train_model.py and retrain_on_live_data.py records the scale used at training
+    time so we can detect this mismatch here.
+    """
+    meta_path = path.with_suffix(".json")
+    if not meta_path.exists():
+        print(
+            f"[WARN][SCALE] No metadata sidecar found for {path.name}. "
+            "Cannot verify delay/jitter scale. If this model was trained on "
+            "realistic_network_dataset.csv without the *1000 conversion, "
+            "predictions will be wrong. Re-run train_model.py to generate a "
+            "validated ms-scale model."
+        )
+        return
+    try:
+        with open(meta_path, encoding="utf-8") as _mf:
+            meta = json.load(_mf)
+    except Exception as exc:
+        print(f"[WARN][SCALE] Could not read {meta_path.name}: {exc}")
+        return
+    delay_scale = meta.get("delay_scale", "unknown")
+    if delay_scale != "ms":
+        print(
+            f"[ERROR][SCALE] Model {path.name} metadata reports "
+            f"delay_scale='{delay_scale}' — expected 'ms'. "
+            "The receiver feeds milliseconds; features will be mis-scaled "
+            "by 1000×. Falling back to heuristic predictor is strongly advised. "
+            "Re-run train_model.py to regenerate a correct ms-scale model."
+        )
+    else:
+        trained_on = meta.get("trained_on", "unknown")
+        trained_at = meta.get("trained_at", "unknown")
+        print(
+            f"[MODEL] Scale OK — delay_scale=ms  "
+            f"trained_on={trained_on}  trained_at={trained_at}"
+        )
+
+
 def load_model():
     joblib = None
     try:
@@ -231,6 +276,7 @@ def load_model():
             if path.exists():
                 model = joblib.load(path)
                 print(f"\n[MODEL] Loaded model: {path}")
+                _check_model_scale(path)
                 return model
         except Exception as exc:
             print(f"[WARN] Failed to load model {path}: {exc}")
@@ -596,6 +642,12 @@ try:
             recv_time = time.time()
             try:
                 raw = data.decode("utf-8", errors="replace").strip()
+                # Strip RAW_LEGACY prefix emitted by semantic-capable senders
+                # whose encoder buffer hasn't filled yet.  After stripping,
+                # the remainder is a normal CSV line.
+                _is_raw_legacy = raw.startswith("RAW_LEGACY:")
+                if _is_raw_legacy:
+                    raw = raw[len("RAW_LEGACY:"):].strip()
                 if raw.startswith("{"):
                     packet = json.loads(raw)
                     if not isinstance(packet, dict):
@@ -621,8 +673,16 @@ try:
 
             # --- Semantic decoder path (overrides label if packet was encoded) ---
             # Only attempt decode for device types that have trained models.
+            # Fast-path: skip decode on raw CSV packets (not JSON) — these come
+            # from legacy fallback or RAW_LEGACY-tagged packets during the
+            # encoder buffer fill window.  decode_payload() expects JSON and
+            # would return None anyway, but skipping avoids the overhead and
+            # spurious log warnings.
             decoded_result = None
-            if _SEMANTIC_AVAILABLE and device_type in SEMANTIC_CAPABLE_TYPES:
+            if (_SEMANTIC_AVAILABLE
+                    and device_type in SEMANTIC_CAPABLE_TYPES
+                    and not _is_raw_legacy
+                    and raw.startswith("{")):
                 decoded_result = decode_payload(data)
 
             if decoded_result is not None:

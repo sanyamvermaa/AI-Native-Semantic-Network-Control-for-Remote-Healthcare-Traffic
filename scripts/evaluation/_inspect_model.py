@@ -22,7 +22,11 @@ classes    = list(model.classes_)
 
 df = pd.read_csv(CSV_PATH)
 
-# Apply the same fix as train_model.py
+# realistic_network_dataset.csv stores delay and jitter in *seconds*.
+# The current model (best_network_model.pkl) is trained on ms-scale data
+# (synthetic_control_dataset.csv), matching what health_receiver.py feeds it
+# at inference time (avg_delay * 1000.0).  Convert here so the inspection
+# uses the same scale the model expects.
 df["jitter"]    *= 1000.0
 df["avg_delay"] *= 1000.0
 df = df.sort_values("timestamp").reset_index(drop=True)

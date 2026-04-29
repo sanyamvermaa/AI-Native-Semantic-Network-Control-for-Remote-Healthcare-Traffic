@@ -51,13 +51,13 @@ def dashboard_html() -> str:
     return """<!doctype html>
 <html lang=\"en\">
 <head>
-  <meta charset=\"utf-8\" />
-  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Ward Monitor</title>
-  <link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">
-  <link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>
-  <link href=\"https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap\" rel=\"stylesheet\">
-  <script src=\"https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js\"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
   <style>
     :root {
       --bg: #f3f6fb;
@@ -74,7 +74,7 @@ def dashboard_html() -> str:
       color: var(--text);
       min-height: 100vh;
     }
-    .container { max-width: 1360px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; overflow-x: clip; }
+    .container { max-width: 1400px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; overflow-x: clip; }
     .card {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -104,7 +104,7 @@ def dashboard_html() -> str:
     .active-command { margin-top: 8px; font-size: 13px; color: var(--muted); transition: color 0.3s ease; }
     .stats { text-align: right; color: var(--muted); font-size: 13px; line-height: 1.6; }
     .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: transparent; margin-left: 6px; vertical-align: middle; }
-    .metrics { display: grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 12px; align-items: start; }
+    .metrics { display: grid; grid-template-columns: repeat(4, minmax(160px, 1fr)); gap: 12px; align-items: start; }
     .metrics .card {
       height: 220px;
       display: flex;
@@ -112,17 +112,15 @@ def dashboard_html() -> str:
     }
     .metric-head { display: flex; align-items: start; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
     .metric-title { color: var(--muted); font-size: 13px; }
-    .metric-value { font-size: 30px; font-weight: 800; line-height: 1; }
+    .metric-value { font-size: 28px; font-weight: 800; line-height: 1; }
     .metrics canvas {
       width: 100% !important;
       height: 92px !important;
       max-height: 92px !important;
       margin-top: auto;
     }
-    .semantic-card {
-      display: grid;
-      gap: 10px;
-    }
+    .semantic-card { display: grid; gap: 10px; }
+    .semantic-split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
     .semantic-table {
       width: 100%;
       border-collapse: collapse;
@@ -140,10 +138,7 @@ def dashboard_html() -> str:
       border-bottom: 1px solid #e7edf6;
     }
     .semantic-table tbody tr:last-child td { border-bottom: none; }
-    .semantic-mode {
-      font-weight: 700;
-      color: #334155;
-    }
+    .semantic-mode { font-weight: 700; color: #334155; }
     .semantic-num { text-align: right; font-variant-numeric: tabular-nums; }
     .semantic-pct {
       text-align: right;
@@ -165,6 +160,7 @@ def dashboard_html() -> str:
     .badge-critical { background: rgba(220, 38, 38, 0.14); color: #b91c1c; border-color: rgba(220, 38, 38, 0.28); }
     .mode-pill { background: #eef2f7; color: #334155; border-color: #d2dbe8; }
     .section-title { font-size: 17px; font-weight: 700; margin: 2px 0 10px; }
+    .section-sub { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
     .device-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
     .device-card {
       position: relative;
@@ -178,7 +174,7 @@ def dashboard_html() -> str:
     .device-top { display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: 13px; }
     .device-value { display: flex; align-items: end; gap: 8px; font-size: 28px; font-weight: 800; line-height: 1; }
     .device-unit { color: var(--muted); font-size: 14px; font-weight: 600; padding-bottom: 2px; }
-    .device-bottom { display: flex; gap: 8px; align-items: center; }
+    .device-bottom { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .stale { opacity: 0.4; }
     .stale-overlay {
       position: absolute;
@@ -205,15 +201,15 @@ def dashboard_html() -> str:
     .arch-title { font-weight: 800; font-size: 14px; }
     .arch-sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
     .arch-arrow { font-size: 12px; color: var(--muted); display: grid; justify-items: center; line-height: 1.2; }
-    .history { max-height: 300px; overflow-y: auto; margin-top: 8px; border: 1px solid var(--border); border-radius: 10px; background: #f8fafc; }
+    .history { max-height: 320px; overflow-y: auto; margin-top: 8px; border: 1px solid var(--border); border-radius: 10px; background: #f8fafc; }
     .history-row {
       display: grid;
-      grid-template-columns: 70px 108px 16px minmax(0, 1fr) 62px;
+      grid-template-columns: 60px 88px 82px 12px minmax(0,1fr) 54px;
       align-items: center;
-      gap: 8px;
-      padding: 10px;
+      gap: 6px;
+      padding: 8px 10px;
       border-top: 1px solid #e2e8f0;
-      font-size: 13px;
+      font-size: 12px;
     }
     .history-row .badge {
       max-width: 100%;
@@ -224,17 +220,20 @@ def dashboard_html() -> str:
     .history-row:first-child { border-top: none; }
     .history-row.newest { background: #edf3ff; }
     .history-empty { color: var(--muted); text-align: center; padding: 26px 10px; }
+    .tx-mode-tag { font-size: 10px; padding: 2px 5px; border-radius: 4px; background: #f1f5f9; color: #64748b; border: 1px solid #e2e8f0; display: inline-block; margin-left: 4px; font-weight: 600; vertical-align: middle; }
     .footer { text-align: center; color: var(--muted); font-size: 12px; padding: 2px 4px 10px; }
-    @media (max-width: 1024px) {
+    @media (max-width: 1100px) {
       .top-bar { grid-template-columns: 1fr; text-align: left; }
       .state-wrap { text-align: left; }
       .stats { text-align: left; }
-      .metrics { grid-template-columns: 1fr; }
+      .metrics { grid-template-columns: repeat(2, 1fr); }
       .metrics .card { height: 210px; }
       .bottom-split { grid-template-columns: 1fr; }
+      .semantic-split { grid-template-columns: 1fr; }
     }
     @media (max-width: 720px) {
       .container { padding: 10px; gap: 12px; }
+      .metrics { grid-template-columns: 1fr; }
       .history-row {
         grid-template-columns: 1fr;
         gap: 6px;
@@ -245,8 +244,8 @@ def dashboard_html() -> str:
   </style>
 </head>
 <body>
-  <div class=\"container\">
-    <div class=\"card top-bar\">
+  <div class="container">
+    <div class="card top-bar">
       <div>
         <div class=\"title-main\">Ward Network Monitor</div>
         <div class=\"title-sub\">AI-Native Closed-Loop Control</div>
@@ -268,26 +267,54 @@ def dashboard_html() -> str:
       <div class=\"card\"><div class=\"metric-head\"><div><div class=\"metric-title\">Packet Loss</div><div id=\"packetLossValue\" class=\"metric-value\">0.0%</div></div><span id=\"packetLossBadge\" class=\"badge badge-normal\">NORMAL</span></div><canvas id=\"packetLossChart\" height=\"80\"></canvas></div>
       <div class=\"card\"><div class=\"metric-head\"><div><div class=\"metric-title\">Average Delay</div><div id=\"delayValue\" class=\"metric-value\">0 ms</div></div><span id=\"delayBadge\" class=\"badge badge-normal\">NORMAL</span></div><canvas id=\"delayChart\" height=\"80\"></canvas></div>
       <div class=\"card\"><div class=\"metric-head\"><div><div class=\"metric-title\">Jitter</div><div id=\"jitterValue\" class=\"metric-value\">0 ms</div></div><span id=\"jitterBadge\" class=\"badge badge-normal\">NORMAL</span></div><canvas id=\"jitterChart\" height=\"80\"></canvas></div>
+      <div class=\"card\"><div class=\"metric-head\"><div><div class=\"metric-title\">Throughput</div><div id=\"throughputValue\" class=\"metric-value\">0 bps</div></div><span id=\"throughputBadge\" class=\"badge badge-normal\">OK</span></div><canvas id=\"throughputChart\" height=\"80\"></canvas></div>
     </div>
 
     <div class=\"card semantic-card\">
-      <div class=\"section-title\">Semantic Mode Counters</div>
-      <table class=\"semantic-table\">
-        <thead>
-          <tr>
-            <th>Mode</th>
-            <th style=\"text-align:right\">Sent</th>
-            <th style=\"text-align:right\">Suppressed</th>
-            <th style=\"text-align:right\">Suppression</th>
-          </tr>
-        </thead>
-        <tbody id=\"semanticModeRows\">
-          <tr><td class=\"semantic-mode\">RAW</td><td class=\"semantic-num\">--</td><td class=\"semantic-num\">--</td><td class=\"semantic-pct\">--</td></tr>
-          <tr><td class=\"semantic-mode\">DELTA</td><td class=\"semantic-num\">--</td><td class=\"semantic-num\">--</td><td class=\"semantic-pct\">--</td></tr>
-          <tr><td class=\"semantic-mode\">SUMMARY</td><td class=\"semantic-num\">--</td><td class=\"semantic-num\">--</td><td class=\"semantic-pct\">--</td></tr>
-          <tr><td class=\"semantic-mode\">CRITICAL_ONLY</td><td class=\"semantic-num\">--</td><td class=\"semantic-num\">--</td><td class=\"semantic-pct\">--</td></tr>
-        </tbody>
-      </table>
+      <div class=\"section-title\">Transmission Mode Counters</div>
+      <p class=\"section-sub\">Per-mode packet counts aggregated across all 8 senders. <strong>Tx Mode</strong> is the sender-side filtering strategy; <strong>Policy Command</strong> is what the ward controller issued.  SEMANTIC_CRITICAL and SEMANTIC_ALERT use ML-encoded payloads (ECG/BP only). DOWNSAMPLED_ECG uses DELTA mode at 25 Hz for ECG; other devices hold natural rate.</p>
+      <div class=\"semantic-split\">
+        <div>
+          <div style=\"font-size:13px;font-weight:700;margin-bottom:6px;color:var(--muted)\">Tx Mode (sender-side filtering)</div>
+          <table class=\"semantic-table\">
+            <thead>
+              <tr>
+                <th>Tx Mode</th>
+                <th style=\"text-align:right\">Sent</th>
+                <th style=\"text-align:right\">Suppressed</th>
+                <th style=\"text-align:right\">Suppression %</th>
+              </tr>
+            </thead>
+            <tbody id=\"semanticModeRows\">
+              <tr><td class=\"semantic-mode\">RAW</td><td class=\"semantic-num\">--</td><td class=\"semantic-num\">--</td><td class=\"semantic-pct\">--</td></tr>
+              <tr><td class=\"semantic-mode\">DELTA</td><td class=\"semantic-num\">--</td><td class=\"semantic-num\">--</td><td class=\"semantic-pct\">--</td></tr>
+              <tr><td class=\"semantic-mode\">SUMMARY</td><td class=\"semantic-num\">--</td><td class=\"semantic-num\">--</td><td class=\"semantic-pct\">--</td></tr>
+              <tr><td class=\"semantic-mode\">CRITICAL_ONLY</td><td class=\"semantic-num\">--</td><td class=\"semantic-num\">--</td><td class=\"semantic-pct\">--</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <div style=\"font-size:13px;font-weight:700;margin-bottom:6px;color:var(--muted)\">Policy Command → Tx Mode mapping</div>
+          <table class=\"semantic-table\">
+            <thead>
+              <tr>
+                <th>Policy Command</th>
+                <th>Tx Mode</th>
+                <th>Multiplier</th>
+                <th>Network × Health</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td class=\"semantic-mode\" style=\"color:#15803d\">FULL_ECG</td><td>RAW</td><td>1.0×</td><td>Stable × NORMAL</td></tr>
+              <tr><td class=\"semantic-mode\" style=\"color:#15803d\">FULL_ECG_PRIORITY</td><td>RAW</td><td>0.8×</td><td>Stable × ALERT</td></tr>
+              <tr><td class=\"semantic-mode\" style=\"color:#b45309\">DOWNSAMPLED_ECG</td><td>DELTA</td><td>4.0× (ECG→25Hz)</td><td>Unstable × NORMAL</td></tr>
+              <tr><td class=\"semantic-mode\" style=\"color:#b45309\">SEMANTIC_ALERT</td><td>DELTA</td><td>1.5×</td><td>Unstable × ALERT | Critical × ALERT</td></tr>
+              <tr><td class=\"semantic-mode\" style=\"color:#b91c1c\">SEMANTIC_CRITICAL</td><td>CRITICAL_ONLY</td><td>1.0×</td><td>Stable × CRITICAL | Unstable × CRITICAL | Critical × CRITICAL</td></tr>
+              <tr><td class=\"semantic-mode\" style=\"color:#64748b\">SEMANTIC_SUMMARY</td><td>SUMMARY</td><td>8.0×</td><td>Critical × NORMAL | timeout</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
 
     <div class=\"card\">
@@ -299,19 +326,23 @@ def dashboard_html() -> str:
       <div class=\"card\">
         <div class=\"section-title\">System Architecture</div>
         <div class=\"architecture-flow\">
-          <div class=\"arch-box\" style=\"border-color:#238636\"><div class=\"arch-title\">8 SENDERS</div><div class=\"arch-sub\">ECGx2 SpO2x2 BPx2 Temp Resp</div></div>
-          <div class=\"arch-arrow\">UDP :9000<br>▼</div>
-          <div class=\"arch-box\" style=\"border-color:#58a6ff\"><div class=\"arch-title\">RECEIVER</div><div class=\"arch-sub\">ML Inference | 9-Case Policy</div><div style=\"margin-top:6px\"><span id=\"receiverState\" class=\"badge mode-pill\">UNKNOWN</span></div></div>
-          <div class=\"arch-arrow\">UDP :5006<br>▼</div>
-          <div class=\"arch-box\" style=\"border-color:#8957e5\"><div class=\"arch-title\">WARD CONTROLLER</div><div class=\"arch-sub\">Fleet Manager</div><div style=\"margin-top:6px\"><span id=\"controllerCommand\" class=\"badge mode-pill\">N/A</span></div></div>
-          <div class=\"arch-arrow\">ward_mode_state.json<br>▼</div>
-          <div class=\"arch-box\" style=\"border-color:#6e7681\"><div class=\"arch-title\">ALL 8 SENDERS</div><div class=\"arch-sub\">Adaptive Mode</div></div>
+          <div class=\"arch-box\" style=\"border-color:#238636\"><div class=\"arch-title\">8 SENDERS</div><div class=\"arch-sub\">ECG×2 · SpO2×2 · BloodPressure×2 · Temperature · Respiration</div><div class=\"arch-sub\" style=\"margin-top:4px\">Tx modes: RAW / DELTA / SUMMARY / CRITICAL_ONLY</div></div>
+          <div class=\"arch-arrow\">UDP :9000 · semantic payloads (ECG+BP) or raw CSV<br>▼</div>
+          <div class=\"arch-box\" style=\"border-color:#58a6ff\"><div class=\"arch-title\">RECEIVER</div><div class=\"arch-sub\">XGBoost ML Network Classifier (24 features, 3 classes)</div><div class=\"arch-sub\">Semantic decoder for ECG + BloodPressure · EMA health state</div><div style=\"margin-top:6px\"><span id=\"receiverState\" class=\"badge mode-pill\">UNKNOWN</span></div></div>
+          <div class=\"arch-arrow\">UDP :5006 · JSON telemetry + z-vectors<br>▼</div>
+          <div class=\"arch-box\" style=\"border-color:#8957e5\"><div class=\"arch-title\">WARD CONTROLLER</div><div class=\"arch-sub\">9-case policy (3 net × 3 health) + PatientFusion escalation</div><div class=\"arch-sub\">ACK-retried unicast commands to each sender</div><div style=\"margin-top:6px\"><span id=\"controllerCommand\" class=\"badge mode-pill\">N/A</span></div></div>
+          <div class=\"arch-arrow\">UDP :600x per device + ward_mode_state.json<br>▼</div>
+          <div class=\"arch-box\" style=\"border-color:#6e7681\"><div class=\"arch-title\">ALL 8 SENDERS</div><div class=\"arch-sub\">Adapt tx mode + interval multiplier per command</div><div class=\"arch-sub\">Watchdog: fallback to FULL_ECG after 30 s silence</div></div>
         </div>
       </div>
-      <div class=\"card\"><div class=\"section-title\">Command History</div><div id=\"commandHistory\" class=\"history\"><div class=\"history-empty\">Awaiting first command...</div></div></div>
+      <div class=\"card\">
+        <div class=\"section-title\">Command History</div>
+        <div style=\"font-size:11px;color:var(--muted);margin-bottom:4px\">time · net state · health state → command · latency</div>
+        <div id=\"commandHistory\" class=\"history\"><div class=\"history-empty\">Awaiting first command...</div></div>
+      </div>
     </div>
 
-    <div class=\"footer\">AI-Native Network Control - Ward Monitor  |  Polling 1s  |  XGBoost F1=0.865  |  Latency ~519ms  |  9-Case Adaptive Policy</div>
+    <div class=\"footer\">AI-Native Semantic Network Control · Ward Monitor · Polling 1 s · XGBoost network classifier (24 features) · 9-case adaptive policy · SemanticEncoder ECG+BP (latent dim=16) · PatientFusion escalation</div>
   </div>
 
   <script>
@@ -328,14 +359,34 @@ def dashboard_html() -> str:
       UNKNOWN: { fg: "#475569", bg: "#e2e8f0", dot: "⚪" }
     };
     const HEALTH_COLORS = { NORMAL: "badge-normal", ALERT: "badge-warning", CRITICAL: "badge-critical", UNKNOWN: "mode-pill" };
+    // 6-command policy: 3 network states × 3 health states
     const COMMAND_COLORS = {
-      FULL_ECG: "#15803d", FULL_ECG_PRIORITY: "#15803d", DOWNSAMPLED_ECG: "#b45309",
-      SEMANTIC_ALERT: "#b45309", SEMANTIC_CRITICAL: "#b91c1c", SEMANTIC_SUMMARY: "#64748b"
+      FULL_ECG:           "#15803d",  // Stable  × NORMAL     → RAW 1.0×
+      FULL_ECG_PRIORITY:  "#16a34a",  // Stable  × ALERT      → RAW 0.8×
+      DOWNSAMPLED_ECG:    "#b45309",  // Unstable× NORMAL     → DELTA 4.0×
+      SEMANTIC_ALERT:     "#d97706",  // Unstable× ALERT|CRITICAL or Critical×ALERT → DELTA 1.5×
+      SEMANTIC_CRITICAL:  "#b91c1c",  // Stable/Unstable/Critical × CRITICAL → CRITICAL_ONLY 1.0×
+      SEMANTIC_SUMMARY:   "#64748b",  // Critical× NORMAL | timeout → SUMMARY 8.0×
+    };
+    // Map each command to its underlying Tx Mode (matches COMMAND_SEMANTIC_MAP in health_sender.py)
+    const COMMAND_TX_MODE = {
+      FULL_ECG:           "RAW",
+      FULL_ECG_PRIORITY:  "RAW",
+      DOWNSAMPLED_ECG:    "DELTA",
+      SEMANTIC_ALERT:     "DELTA",
+      SEMANTIC_CRITICAL:  "CRITICAL_ONLY",
+      SEMANTIC_SUMMARY:   "SUMMARY",
     };
 
     let charts = {};
     let currentCommand = "N/A";
     const fetchStatus = { state: false, devices: false, telemetry: false, commands: false, semantic: false };
+    // Throughput human-readable formatter
+    function fmtBps(bps) {
+      if (bps >= 1e6) return (bps / 1e6).toFixed(2) + ' Mbps';
+      if (bps >= 1e3) return (bps / 1e3).toFixed(1) + ' kbps';
+      return bps.toFixed(0) + ' bps';
+    }
     const CHART_WINDOW = 60;
 
     function setFetchFailure(endpoint, failed) {
@@ -352,9 +403,11 @@ def dashboard_html() -> str:
     function threshold(metric, value) {
       const v = Number(value);
       if (!Number.isFinite(v)) return { label: "NORMAL", cls: "badge-normal", color: "#15803d" };
-      if (metric === "packet_loss_rate") { if (v >= 8) return { label: "CRITICAL", cls: "badge-critical", color: "#b91c1c" }; if (v >= 3) return { label: "WARNING", cls: "badge-warning", color: "#b45309" }; }
-      if (metric === "avg_delay") { if (v >= 130) return { label: "CRITICAL", cls: "badge-critical", color: "#b91c1c" }; if (v >= 40) return { label: "WARNING", cls: "badge-warning", color: "#b45309" }; }
-      if (metric === "jitter") { if (v >= 35) return { label: "CRITICAL", cls: "badge-critical", color: "#b91c1c" }; if (v >= 8) return { label: "WARNING", cls: "badge-warning", color: "#b45309" }; }
+      // Thresholds match run_closed_loop_stress_auto.sh profile ranges and common.py choose_network_state
+      if (metric === "packet_loss_rate") { if (v >= 8) return { label: "CRITICAL", cls: "badge-critical", color: "#b91c1c" }; if (v >= 3) return { label: "WARN", cls: "badge-warning", color: "#b45309" }; }
+      if (metric === "avg_delay")        { if (v >= 130) return { label: "CRITICAL", cls: "badge-critical", color: "#b91c1c" }; if (v >= 35) return { label: "WARN", cls: "badge-warning", color: "#b45309" }; }
+      if (metric === "jitter")           { if (v >= 35) return { label: "CRITICAL", cls: "badge-critical", color: "#b91c1c" }; if (v >= 8)  return { label: "WARN", cls: "badge-warning", color: "#b45309" }; }
+      if (metric === "throughput_bps")   { if (v < 1000) return { label: "LOW", cls: "badge-warning", color: "#b45309" }; }
       return { label: "NORMAL", cls: "badge-normal", color: "#15803d" };
     }
 
@@ -479,14 +532,26 @@ def dashboard_html() -> str:
 
     function updateMetric(kind, value, unit) {
       const t = threshold(kind, value);
-      const ids = { packet_loss_rate: ["packetLossValue", "packetLossBadge", "packetLoss"], avg_delay: ["delayValue", "delayBadge", "delay"], jitter: ["jitterValue", "jitterBadge", "jitter"] }[kind];
+      const MAP = {
+        packet_loss_rate: ["packetLossValue", "packetLossBadge", "packetLoss"],
+        avg_delay:        ["delayValue",      "delayBadge",      "delay"],
+        jitter:           ["jitterValue",     "jitterBadge",     "jitter"],
+        throughput_bps:   ["throughputValue", "throughputBadge", "throughput"],
+      };
+      const ids = MAP[kind];
+      if (!ids) return;
       const vEl = document.getElementById(ids[0]);
-      vEl.textContent = `${Number(value || 0).toFixed(1)}${unit}`;
+      if (kind === "throughput_bps") {
+        vEl.textContent = fmtBps(Number(value) || 0);
+      } else {
+        vEl.textContent = `${Number(value || 0).toFixed(1)}${unit}`;
+      }
       vEl.style.color = t.color;
       const bEl = document.getElementById(ids[1]);
       bEl.textContent = t.label;
       setBadgeClass(bEl, t.cls);
       const chart = charts[ids[2]];
+      if (!chart) return;
       const y = Number(value) || 0;
       const series = chart.data.datasets[0].data;
       const hasSeed = series.some(v => v !== null);
@@ -506,9 +571,10 @@ def dashboard_html() -> str:
     function seedChartsFromHistory(data) {
       // Fill charts from the historical arrays returned by /api/telemetry.
       // Only run once on the first successful fetch so live updates take over.
-      const loss   = (data.packet_loss_rate || []).slice(-CHART_WINDOW);
-      const delay  = (data.avg_delay        || []).slice(-CHART_WINDOW);
-      const jitter = (data.jitter           || []).slice(-CHART_WINDOW);
+      const loss       = (data.packet_loss_rate || []).slice(-CHART_WINDOW);
+      const delay      = (data.avg_delay        || []).slice(-CHART_WINDOW);
+      const jitter     = (data.jitter           || []).slice(-CHART_WINDOW);
+      const throughput = (data.throughput_bps   || []).slice(-CHART_WINDOW);
 
       function padLeft(arr, len) {
         const out = Array(len).fill(null);
@@ -517,9 +583,10 @@ def dashboard_html() -> str:
       }
 
       [
-        ["packetLoss", padLeft(loss,   CHART_WINDOW)],
-        ["delay",      padLeft(delay,  CHART_WINDOW)],
-        ["jitter",     padLeft(jitter, CHART_WINDOW)],
+        ["packetLoss", padLeft(loss,       CHART_WINDOW)],
+        ["delay",      padLeft(delay,      CHART_WINDOW)],
+        ["jitter",     padLeft(jitter,     CHART_WINDOW)],
+        ["throughput", padLeft(throughput, CHART_WINDOW)],
       ].forEach(([key, vals]) => {
         const c = charts[key];
         if (!c) return;
@@ -550,6 +617,7 @@ def dashboard_html() -> str:
         updateMetric("packet_loss_rate", cur.packet_loss_rate || 0, "%");
         updateMetric("avg_delay", cur.avg_delay || 0, " ms");
         updateMetric("jitter", cur.jitter || 0, " ms");
+        updateMetric("throughput_bps", cur.throughput_bps || 0, "");
         setFetchFailure("telemetry", false);
       } catch (_) { setFetchFailure("telemetry", true); }
     }
@@ -571,13 +639,16 @@ def dashboard_html() -> str:
         }
         container.innerHTML = rows.map((r, i) => {
           const ns = STATE_COLORS[r.network_state] ? r.network_state : "UNKNOWN";
+          const hs = r.health_state || "UNKNOWN";
           const cmdColor = COMMAND_COLORS[r.command] || "#8b949e";
+          const txMode = COMMAND_TX_MODE[r.command] || "?";
           return `
-            <div class="history-row ${i === 0 ? "newest" : ""}">
+            <div class="history-row ${i === 0 ? "newest" : "}">
               <div>${r.time_str || "--:--:--"}</div>
-              <div><span class="badge mode-pill" style="color:${STATE_COLORS[ns].fg};border-color:${STATE_COLORS[ns].fg}66">${STATE_COLORS[ns].dot} ${ns.toUpperCase()}</span></div>
+              <div><span class="badge mode-pill" style="color:${STATE_COLORS[ns].fg};border-color:${STATE_COLORS[ns].fg}66">${STATE_COLORS[ns].dot} ${ns}</span></div>
+              <div><span class="badge ${HEALTH_COLORS[hs] || "mode-pill"}">${hs}</span></div>
               <div>→</div>
-              <div><span class="badge mode-pill" style="color:${cmdColor};border-color:${cmdColor}66">${r.command || "N/A"}</span></div>
+              <div><span class="badge mode-pill" style="color:${cmdColor};border-color:${cmdColor}66">${r.command || "N/A"}</span><span class="tx-mode-tag">${txMode}</span></div>
               <div>${Number(r.latency_ms || 0).toFixed(0)}ms</div>
             </div>
           `;
@@ -596,8 +667,9 @@ def dashboard_html() -> str:
         const total = Math.max(1, sent + suppressed);
         const pct = (suppressed * 100.0) / total;
         document.getElementById("semanticStat").textContent =
-          `Semantic suppression: ${suppressed}/${sent + suppressed} (${pct.toFixed(1)}%)`;
+          `Suppression: ${suppressed}/${sent + suppressed} (${pct.toFixed(1)}%)`;
 
+        // Tx mode rows (RAW, DELTA, SUMMARY, CRITICAL_ONLY) — from sender stats files
         const modes = ["RAW", "DELTA", "SUMMARY", "CRITICAL_ONLY"];
         const rows = modes.map((mode) => {
           const modeStat = s.modes && s.modes[mode] ? s.modes[mode] : { sent: 0, suppressed: 0 };
@@ -605,11 +677,13 @@ def dashboard_html() -> str:
           const modeSuppressed = Number(modeStat.suppressed || 0);
           const modeTotal = Math.max(1, modeSent + modeSuppressed);
           const modePct = (modeSuppressed * 100.0) / modeTotal;
+          // Colour by mode: RAW=green, DELTA=amber, CRITICAL_ONLY=red, SUMMARY=muted
+          const modeColor = { RAW: "#15803d", DELTA: "#b45309", CRITICAL_ONLY: "#b91c1c", SUMMARY: "#64748b" }[mode] || "#334155";
           return `
             <tr>
-              <td class="semantic-mode">${mode}</td>
-              <td class="semantic-num">${modeSent}</td>
-              <td class="semantic-num">${modeSuppressed}</td>
+              <td class="semantic-mode" style="color:${modeColor}">${mode}</td>
+              <td class="semantic-num">${modeSent.toLocaleString()}</td>
+              <td class="semantic-num">${modeSuppressed.toLocaleString()}</td>
               <td class="semantic-pct">${modePct.toFixed(1)}%</td>
             </tr>
           `;
@@ -618,10 +692,10 @@ def dashboard_html() -> str:
         setFetchFailure("semantic", false);
       } catch (_) {
         document.getElementById("semanticModeRows").innerHTML = `
-          <tr><td class="semantic-mode">RAW</td><td class="semantic-num">--</td><td class="semantic-num">--</td><td class="semantic-pct">--</td></tr>
-          <tr><td class="semantic-mode">DELTA</td><td class="semantic-num">--</td><td class="semantic-num">--</td><td class="semantic-pct">--</td></tr>
-          <tr><td class="semantic-mode">SUMMARY</td><td class="semantic-num">--</td><td class="semantic-num">--</td><td class="semantic-pct">--</td></tr>
-          <tr><td class="semantic-mode">CRITICAL_ONLY</td><td class="semantic-num">--</td><td class="semantic-num">--</td><td class="semantic-pct">--</td></tr>
+          <tr><td class="semantic-mode" style="color:#15803d">RAW</td><td class="semantic-num">--</td><td class="semantic-num">--</td><td class="semantic-pct">--</td></tr>
+          <tr><td class="semantic-mode" style="color:#b45309">DELTA</td><td class="semantic-num">--</td><td class="semantic-num">--</td><td class="semantic-pct">--</td></tr>
+          <tr><td class="semantic-mode" style="color:#64748b">SUMMARY</td><td class="semantic-num">--</td><td class="semantic-num">--</td><td class="semantic-pct">--</td></tr>
+          <tr><td class="semantic-mode" style="color:#b91c1c">CRITICAL_ONLY</td><td class="semantic-num">--</td><td class="semantic-num">--</td><td class="semantic-pct">--</td></tr>
         `;
         setFetchFailure("semantic", true);
       }
@@ -630,13 +704,14 @@ def dashboard_html() -> str:
     function bootstrap() {
       buildDevices();
       charts.packetLoss = makeChart("packetLossChart", "#15803d");
-      charts.delay = makeChart("delayChart", "#15803d");
-      charts.jitter = makeChart("jitterChart", "#15803d");
+      charts.delay      = makeChart("delayChart",      "#15803d");
+      charts.jitter     = makeChart("jitterChart",     "#15803d");
+      charts.throughput = makeChart("throughputChart", "#3b82f6");  // blue for throughput
       updateState(); updateDevices(); updateTelemetry(); updateCommands(); updateSemanticStats();
-      setInterval(updateState, 1000);
-      setInterval(updateDevices, 1000);
-      setInterval(updateTelemetry, 1000);
-      setInterval(updateCommands, 2000);
+      setInterval(updateState,        1000);
+      setInterval(updateDevices,      1000);
+      setInterval(updateTelemetry,    1000);
+      setInterval(updateCommands,     2000);
       setInterval(updateSemanticStats, 2000);
     }
     window.addEventListener("DOMContentLoaded", bootstrap);

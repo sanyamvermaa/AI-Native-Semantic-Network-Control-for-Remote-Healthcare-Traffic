@@ -256,8 +256,13 @@ class SemanticEncoder:
         """
         Return a clinical importance score in [0.0, 1.0].
 
-        If the buffer is full and torch is available, pushes ``value``,
-        encodes the window and returns max(P_ALERT, P_CRITICAL).
+        If the buffer is full and torch is available, creates a temporary
+        snapshot of the buffer with ``value`` appended, encodes it and
+        returns max(P_ALERT, P_CRITICAL).
+
+        **Important**: this method is READ-ONLY — it does NOT mutate
+        ``self.buffer``.  The caller (health_sender main loop) is
+        responsible for calling ``self.push(value)`` separately.
 
         Otherwise falls back to the threshold-based arithmetic from
         health_sender.SemanticBuffer.clinical_importance().
@@ -268,15 +273,27 @@ class SemanticEncoder:
             Latest raw sensor reading (not normalised).
         """
         if self.torch_available and self.ready and self._enc is not None:
-            self.push(value)
-            z = self.encode()
-            if z is not None:
-                result = self.decode(z)
-                probs  = result.get("probabilities", {})
-                return max(
-                    probs.get("ALERT",    0.0),
-                    probs.get("CRITICAL", 0.0),
-                )
+            import torch  # type: ignore
+
+            # Build a temporary window: current buffer + new value (normalised).
+            # We do NOT call self.push() — the buffer must stay untouched.
+            tmp = list(self.buffer)
+            tmp.append(self._normalise(value))
+            # Keep only the last window_size elements (same as deque maxlen)
+            if len(tmp) > self.window_size:
+                tmp = tmp[-self.window_size:]
+
+            x = torch.tensor(tmp, dtype=torch.float32).unsqueeze(0)  # [1, W]
+            with torch.no_grad():
+                z_t = self._enc(x)  # [1, latent_dim]
+            z = z_t.squeeze(0).tolist()
+
+            result = self.decode(z)
+            probs  = result.get("probabilities", {})
+            return max(
+                probs.get("ALERT",    0.0),
+                probs.get("CRITICAL", 0.0),
+            )
         # ---- arithmetic fallback ----------------------------------------
         return self._threshold_importance(value)
 

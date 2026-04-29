@@ -814,6 +814,15 @@ def main() -> None:
                     mode        = tx_mode,
                     sem_buffer  = sem_buffer,
                 )
+                # Tag raw payloads from semantic-capable types so the receiver
+                # can skip decode_payload() during the codec buffer fill window
+                # (first ~2s).  Without this marker the receiver attempts JSON
+                # decode on CSV bytes and logs spurious warnings.
+                if (payload is not None
+                        and args.device_type in SEMANTIC_CAPABLE_TYPES
+                        and sem_encoder is not None
+                        and not sem_encoder.ready):
+                    payload = b"RAW_LEGACY:" + payload
 
             if payload is not None:
                 try:

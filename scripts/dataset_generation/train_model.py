@@ -8,6 +8,8 @@ Changes from v3:
   - Final comparison table across all 3 models
   - Best model auto-saved as best_network_model.pkl
 """
+import json
+import datetime
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -18,6 +20,25 @@ from sklearn.metrics import (classification_report, confusion_matrix,
 from sklearn.preprocessing import LabelEncoder
 import joblib
 import warnings
+
+
+def _save_model_meta(pkl_path: Path, model_type: str) -> None:
+    """Write a JSON sidecar recording that this model expects ms-scale delay/jitter.
+
+    health_receiver.py reads this sidecar at load time to detect models that were
+    trained on the raw realistic_network_dataset.csv (delay/jitter in seconds) and
+    would therefore be mis-calibrated at inference (receiver feeds milliseconds).
+    """
+    meta = {
+        "delay_scale": "ms",
+        "jitter_scale": "ms",
+        "trained_on": "synthetic_control_dataset.csv",
+        "trained_at": datetime.datetime.utcnow().isoformat() + "Z",
+        "model_type": model_type,
+    }
+    with open(pkl_path.with_suffix(".json"), "w") as _mf:
+        json.dump(meta, _mf, indent=2)
+    print(f"[✓] Scale metadata → '{pkl_path.with_suffix('.json')}'")
 warnings.filterwarnings("ignore")
 
 try:
@@ -266,6 +287,7 @@ for feat, val in imp.items():
     print(f"  {feat:<30} {val:.4f}  {bar}")
 
 joblib.dump(full_rf, MODELS_DIR / "robust_network_model.pkl")
+_save_model_meta(MODELS_DIR / "robust_network_model.pkl", "RandomForest")
 print(f"\n[✓] RandomForest saved → '{MODELS_DIR / 'robust_network_model.pkl'}'")
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -320,8 +342,7 @@ if XGBOOST_AVAILABLE:
     )
     full_xgb.fit(X, y_enc)
     joblib.dump(full_xgb, MODELS_DIR / "xgboost_network_model.pkl")
-    print(f"[✓] XGBoost saved → '{MODELS_DIR / 'xgboost_network_model.pkl'}'")
-
+    _save_model_meta(MODELS_DIR / "xgboost_network_model.pkl", "XGBoost")
 # ═══════════════════════════════════════════════════════════════════════════════
 # ── MODEL 3: LightGBM (NEW) ───────────────────────────────────────────────────
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -369,6 +390,7 @@ if LGBM_AVAILABLE:
     )
     full_lgbm.fit(X, y)
     joblib.dump(full_lgbm, MODELS_DIR / "lgbm_network_model.pkl")
+    _save_model_meta(MODELS_DIR / "lgbm_network_model.pkl", "LightGBM")
     print(f"[✓] LightGBM saved → '{MODELS_DIR / 'lgbm_network_model.pkl'}'")
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -399,9 +421,10 @@ best_name = max(scores_map, key=lambda k: scores_map[k][0])
 best_f1, best_model_obj = scores_map[best_name]
 
 joblib.dump(best_model_obj, MODELS_DIR / "best_network_model.pkl")
-import json as _json
+_save_model_meta(MODELS_DIR / "best_network_model.pkl", best_name)
 with open(MODELS_DIR / "label_classes.json", "w") as _lf:
-    _json.dump(list(le.classes_), _lf)
+    json.dump(list(le.classes_), _lf)
 print(f"\n🏆 Best model: {best_name} (held-out F1={best_f1:.3f})")
-print(f"   Saved → '{MODELS_DIR / 'best_network_model.pkl'}'") 
+print(f"   Saved → '{MODELS_DIR / 'best_network_model.pkl'}'")
+print(f"   Scale metadata → '{MODELS_DIR / 'best_network_model.json'}'") 
 print(f"   Label classes → '{MODELS_DIR / 'label_classes.json'}'") 
