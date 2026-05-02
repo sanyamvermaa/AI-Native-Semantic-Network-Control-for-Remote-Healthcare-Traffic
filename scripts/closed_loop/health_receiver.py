@@ -258,6 +258,10 @@ def load_model():
         print("[WARN] joblib unavailable; using heuristic predictor.")
         return None
 
+    if MODEL_PATH_ENV == "DISABLE":
+        print("[MODEL] Model loading disabled by environment variable; using heuristic predictor.")
+        return None
+
     model_candidates = []
     if MODEL_PATH_ENV:
         model_candidates.append(Path(MODEL_PATH_ENV))

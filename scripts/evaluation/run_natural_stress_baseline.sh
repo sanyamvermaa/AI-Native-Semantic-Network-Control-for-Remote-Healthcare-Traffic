@@ -198,7 +198,7 @@ sudo "${SETUP_SCRIPT}"
 echo "[BASELINE-NATURAL] Starting receiver in receiver_ns..."
 umask 022
 sudo env HEALTH_DATA_BASE_DIR="${DATA_DIR}" \
-    HEALTH_NETWORK_MODEL_PATH="${PROJECT_DIR}/models/best_network_model.pkl" \
+    HEALTH_NETWORK_MODEL_PATH="DISABLE" \
     ip netns exec receiver_ns \
     "${PYTHON_BIN}" -u "${PROJECT_DIR}/scripts/closed_loop/health_receiver.py" \
     > "${RECEIVER_LOG}" 2>&1 &
