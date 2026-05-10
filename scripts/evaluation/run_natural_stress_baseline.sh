@@ -33,6 +33,13 @@ set -euo pipefail
 
 DURATION="${1:-660}"
 
+# ── Deterministic stress seed ─────────────────────────────────────────────────
+# MUST match the value in run_natural_stress_closedloop.sh.
+# Seeding bash $RANDOM makes dwell() micro-noise identical across both runs,
+# so the ONLY experimental variable is the semantic adaptation layer.
+STRESS_SEED="${2:-20260101}"
+RANDOM=$STRESS_SEED
+
 if [[ -n "${PYTHON_BIN:-}" ]]; then
     PYTHON_BIN="${PYTHON_BIN}"
 else
@@ -93,73 +100,35 @@ interpolate_to() {
     _cur_jitter="$to_jitter"
 }
 
-dwell() {
-    local duration="$1"
-    local step=8
-    local elapsed=0
-    local rl dl jl
+# ─────────────────────────────────────────────────────────────────────────────
+# replay_manifest  <manifest_csv>
+#
+#   Replays the pre-generated scenario_manifest.csv line by line.
+#   Each row: step,phase,loss_pct,delay_ms,jitter_ms,sleep_s
+#
+#   This replaces dwell() + ward_natural_scenario() entirely.
+#   Using a pre-generated manifest (Python random seed 20260101) guarantees
+#   byte-identical network conditions across baseline and closed-loop runs,
+#   regardless of bash version, PID, or process startup timing.
+# ─────────────────────────────────────────────────────────────────────────────
+replay_manifest() {
+    local manifest="$1"
+    local prev_phase=""
 
-    while (( elapsed + step <= duration )); do
-        rl=$(awk -v v="$_cur_loss"   -v r="$RANDOM" \
-             'BEGIN{printf "%.3f", v*(0.92 + r/32767.0*0.16)}')
-        dl=$(awk -v v="$_cur_delay"  -v r="$RANDOM" \
-             'BEGIN{printf "%.1f", v*(0.93 + r/32767.0*0.14)}')
-        jl=$(awk -v v="$_cur_jitter" -v r="$RANDOM" \
-             'BEGIN{printf "%.1f", v*(0.90 + r/32767.0*0.20)}')
-        rl=$(awk -v v="$rl" 'BEGIN{if(v<0.001)v=0.001; if(v>30)v=30; printf "%.3f",v}')
-        jl=$(awk -v v="$jl" 'BEGIN{if(v<0.5)v=0.0;    if(v>90)v=90; printf "%.1f",v}')
-        _apply_direct "$rl" "$dl" "$jl"
-        sleep "$step"
-        elapsed=$(( elapsed + step ))
+    # Strip Windows CRLF and skip CSV header, process each row
+    tail -n +2 "$manifest" | tr -d '\r' | while IFS=',' read -r _step phase loss delay jitter slp; do
+        # Print phase banner when phase changes
+        if [[ "$phase" != "$prev_phase" ]]; then
+            echo "[SCENARIO] ${phase}" | tee -a "${STRESS_LOG}"
+            prev_phase="$phase"
+        fi
+        _apply_direct "$loss" "$delay" "$jitter"
+        sleep "$slp"
     done
-
-    local remaining=$(( duration - elapsed ))
-    if (( remaining > 0 )); then sleep "$remaining"; fi
-}
-
-ward_natural_scenario() {
-    echo "[SCENARIO] Phase 1/10 — Morning stable (quiet ward)" | tee -a "${STRESS_LOG}"
-    interpolate_to "0.3" "12" "2" 3 5
-    dwell 65
-
-    echo "[SCENARIO] Phase 2/10 — Gradual degradation (shift change)" | tee -a "${STRESS_LOG}"
-    interpolate_to "5.0" "70" "14" 10 4
-    dwell 40
-
-    echo "[SCENARIO] Phase 3/10 — Brief partial recovery" | tee -a "${STRESS_LOG}"
-    interpolate_to "2.0" "35" "7" 5 4
-    dwell 20
-
-    echo "[SCENARIO] Phase 4/10 — Escalation to critical (busy hour)" | tee -a "${STRESS_LOG}"
-    interpolate_to "14.0" "200" "55" 10 5
-    dwell 30
-
-    echo "[SCENARIO] Phase 5/10 — Sustained critical (peak congestion)" | tee -a "${STRESS_LOG}"
-    interpolate_to "18.0" "260" "70" 4 4
-    dwell 64
-
-    echo "[SCENARIO] Phase 6/10 — Slow recovery to Unstable" | tee -a "${STRESS_LOG}"
-    interpolate_to "4.0" "55" "11" 10 5
-    dwell 20
-
-    echo "[SCENARIO] Phase 7/10 — Stable recovery window" | tee -a "${STRESS_LOG}"
-    interpolate_to "0.5" "15" "3" 6 4
-    dwell 46
-
-    echo "[SCENARIO] Phase 8/10 — Sharp interference burst (equipment)" | tee -a "${STRESS_LOG}"
-    interpolate_to "20.0" "220" "72" 3 3
-    dwell 21
-
-    echo "[SCENARIO] Phase 9/10 — Fast recovery post-burst" | tee -a "${STRESS_LOG}"
-    interpolate_to "1.0" "20" "4" 5 4
-    dwell 20
-
-    echo "[SCENARIO] Phase 10/10 — Stable finish" | tee -a "${STRESS_LOG}"
-    interpolate_to "0.2" "10" "2" 4 4
-    dwell 44
 
     echo "[SCENARIO] Natural ward scenario complete (~630 s total)" | tee -a "${STRESS_LOG}"
 }
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Cleanup
@@ -228,6 +197,7 @@ for dev in "${DEVICES[@]}"; do
         --device-type "${dev_type}" \
         --receiver-ip 10.0.0.2 \
         --base-dir    "${DATA_DIR}" \
+        --seed-base   20260101 \
         > "${SENDER_LOG}" 2>&1 &
     echo "$!" >> "${SENDER_PID_FILE}"
 done
@@ -235,7 +205,14 @@ done
 sleep 2
 
 echo "[BASELINE-NATURAL] Launching natural ward stress scenario (~630 s)..."
-ward_natural_scenario &
+MANIFEST_FILE="${PROJECT_DIR}/scripts/evaluation/scenario_manifest.csv"
+if [[ ! -f "${MANIFEST_FILE}" ]]; then
+    echo "[ERROR] scenario_manifest.csv not found. Generate it first:"
+    echo "  python3 scripts/evaluation/generate_stress_manifest.py"
+    exit 1
+fi
+echo "[BASELINE-NATURAL] Replaying manifest: ${MANIFEST_FILE}"
+replay_manifest "${MANIFEST_FILE}" &
 STRESS_PID=$!
 
 sleep "${DURATION}"

@@ -10,6 +10,19 @@ Transmission modes:
   SUMMARY       — one compressed semantic packet per summary_interval seconds
   CRITICAL_ONLY — suppress normal readings; only transmit clinically urgent ones
 
+DETERMINISTIC SEED
+──────────────────
+Both this script and baseline_sender.py seed Python's `random` module with:
+    PHYSIO_SEED_BASE + device_id
+
+This guarantees that every device produces the *same* physiological
+vital-sign sequence across the closed-loop run and the baseline run.
+The only remaining experimental variable is therefore the semantic
+adaptation layer itself — not random differences in generated vitals.
+
+To use a different scenario epoch, pass --seed-base <int> (same value
+must be used in both scripts).
+
 CHANGELOG (fixes applied):
   [PROFILE] SpO2 interval 0.020s → 1.0s  (clinical 1 Hz)
   [PROFILE] BloodPressure interval 0.050s → 0.010s  (arterial-line 100 Hz, documented)
@@ -34,6 +47,8 @@ CHANGELOG (fixes applied):
   [PERF]    log_file opened once and flushed on interval, not on every packet
             (was 100+ file opens/second for ECG).
   [PERF]    stats_file also opened once and flushed on interval.
+  [SEED]    Deterministic per-device physiological seed (PHYSIO_SEED_BASE + device_id)
+            so baseline and closed-loop runs produce identical vital sequences.
 """
 
 import argparse
@@ -507,6 +522,11 @@ def build_payload(
 # Main
 # ---------------------------------------------------------------------------
 
+# Shared seed base — MUST match the value in baseline_sender.py.
+# Change this integer to produce a different-but-still-reproducible scenario epoch.
+PHYSIO_SEED_BASE = 20260101
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Adaptive closed-loop vital-sign sender")
     parser.add_argument("--device-id",           type=int, required=True)
@@ -525,7 +545,26 @@ def main() -> None:
     parser.add_argument("--initial-command",      type=str, default="FULL_ECG",
                         choices=list(COMMAND_SEMANTIC_MAP.keys()),
                         help="Starting transmission command before first ward_controller message")
+    parser.add_argument(
+        "--seed-base", type=int, default=PHYSIO_SEED_BASE,
+        help="Base random seed.  device_id is added to this value.  "
+             "Must match the value passed to baseline_sender.py for a "
+             "fair controlled experiment."
+    )
     args = parser.parse_args()
+
+    # ── Deterministic per-device seed ──────────────────────────────────────
+    # Ensures this run produces an identical physiological sequence to the
+    # corresponding baseline run, so the ONLY variable is adaptation.
+    _seed = args.seed_base + args.device_id
+    random.seed(_seed)
+    print(f"[Device {args.device_id}|{args.device_type}] Physiological seed: {_seed}")
+    # Also seed numpy for the ECGNeuroKitSource random_state paths.
+    try:
+        import numpy as _np_seed
+        _np_seed.random.seed(_seed)
+    except ImportError:
+        pass
 
     profile  = DEVICE_PROFILES[args.device_type]
     base_dir = args.base_dir

@@ -12,6 +12,19 @@ layer is active.
 
 Log output format is identical to health_sender.py so analyze_results.py
 can compare both runs with the same code.
+
+DETERMINISTIC SEED
+──────────────────
+Both this script and health_sender.py seed Python's `random` module with:
+    PHYSIO_SEED_BASE + device_id
+
+This guarantees that every device produces the *same* physiological
+vital-sign sequence across the baseline run and the closed-loop run.
+The only remaining experimental variable is therefore the semantic
+adaptation layer itself — not random differences in generated vitals.
+
+To use a different scenario epoch, pass --seed-base <int> (same value
+must be used in both scripts).
 """
 
 import argparse
@@ -241,6 +254,11 @@ def _default_base_dir() -> str:
 # Main
 # ---------------------------------------------------------------------------
 
+# Shared seed base — MUST match the value in health_sender.py.
+# Change this integer to get a different-but-still-reproducible scenario epoch.
+PHYSIO_SEED_BASE = 20260101
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Static baseline vital-sign sender (no adaptation)")
     parser.add_argument("--device-id",     type=int, required=True)
@@ -248,7 +266,27 @@ def main() -> None:
     parser.add_argument("--receiver-ip",   type=str, default="10.0.0.2")
     parser.add_argument("--receiver-port", type=int, default=9000)
     parser.add_argument("--base-dir",      type=str, default=None)
+    parser.add_argument(
+        "--seed-base", type=int, default=PHYSIO_SEED_BASE,
+        help="Base random seed.  device_id is added to this value.  "
+             "Must match the value passed to health_sender.py for a "
+             "fair controlled experiment."
+    )
     args = parser.parse_args()
+
+    # ── Deterministic per-device seed ──────────────────────────────────────
+    # Ensures this run produces an identical physiological sequence to the
+    # corresponding closed-loop run, so the ONLY variable is adaptation.
+    _seed = args.seed_base + args.device_id
+    random.seed(_seed)
+    print(f"[Baseline {args.device_id}|{args.device_type}] Physiological seed: {_seed}")
+    # Note: neurokit2 / numpy will still have independent seeds.  We seed
+    # numpy here too for the ECGNeuroKitSource path.
+    try:
+        import numpy as _np_seed
+        _np_seed.random.seed(_seed)
+    except ImportError:
+        pass
 
     if args.base_dir is None:
         args.base_dir = _default_base_dir()
