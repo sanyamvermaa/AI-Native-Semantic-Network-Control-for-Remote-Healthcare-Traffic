@@ -186,6 +186,7 @@ for dev in "${DEVICES[@]}"; do
         --device-type "${dev_type}" \
         --receiver-ip 10.0.0.2 \
         --base-dir    "${DATA_DIR}" \
+        --seed-base   20260101 \
         > "${SENDER_LOG}" 2>&1 &
     echo "$!" >> "${SENDER_PID_FILE}"
 done
