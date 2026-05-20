@@ -58,6 +58,7 @@ import json
 import math
 import os
 import random
+import select
 import socket
 import sys
 import time
@@ -690,8 +691,26 @@ def main() -> None:
         f"control_port={ctrl_port}, base_interval={profile['interval']}s"
     )
 
+    next_tx_time = time.time()
     try:
         while True:
+            now = time.time()
+            sleep_timeout = next_tx_time - now
+            if sleep_timeout > 0:
+                # Non-blocking poll of control socket using select with timeout.
+                # Wakes up instantly when a new control command is received!
+                ready, _, _ = select.select([ctrl_sock], [], [], sleep_timeout)
+                if ready:
+                    # Command received — reset target time so we run the next tick immediately
+                    # under the new rate/mode configuration.
+                    next_tx_time = time.time()
+                    continue
+
+            # Prevent drift catch-up loops if the system experiences a massive CPU delay
+            if next_tx_time < time.time() - current_interval:
+                next_tx_time = time.time()
+
+            next_tx_time += current_interval
             now = time.time()
 
             # --- Drain control socket ---
@@ -764,7 +783,7 @@ def main() -> None:
                 except OSError:
                     pass  # file not present — no correlated burst
 
-            if not burst_mode and random.random() < profile["burst_prob"]:
+            if not burst_mode and random.random() < profile["burst_prob"] * profile["interval"]:
                 burst_mode     = True
                 burst_end_time = now + profile["burst_dur"]
 
@@ -893,8 +912,7 @@ def main() -> None:
             if now - last_stats_flush >= STATS_FLUSH_INTERVAL:
                 flush_semantic_stats(now)
                 last_stats_flush = now
-
-            time.sleep(current_interval)
+            # Pacing is handled via select and target-time scheduler at the start of the loop
 
     except KeyboardInterrupt:
         pass

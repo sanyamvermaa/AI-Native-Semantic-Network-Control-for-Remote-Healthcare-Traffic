@@ -98,7 +98,7 @@ def main():
             print(f"    Closed-Loop : loss={cl:.3f}%  delay={cd:.1f}ms  jitter={cj:.1f}ms")
             break
     else:
-        print("  ✅ All compared entries are IDENTICAL — perfect stress match.")
+        print("  [OK] All compared entries are IDENTICAL - perfect stress match.")
 
     # Side-by-side of first 15 entries
     print()
@@ -109,7 +109,7 @@ def main():
     for i in range(min(15, n)):
         bl,bd,bj = b_arr[i]
         cl,cd,cj = c_arr[i]
-        ok = "✅" if (bl==cl and bd==cd and bj==cj) else "⚠ "
+        ok = "OK" if (bl==cl and bd==cd and bj==cj) else "WARN"
         print(f"  {i:>4}  {bl:>8.3f} {bd:>9.1f} {bj:>9.1f}   "
               f"{cl:>8.3f} {cd:>9.1f} {cj:>9.1f}  {ok}")
 
@@ -122,10 +122,10 @@ def main():
 
     print("=" * 68)
     if total_mismatches == 0:
-        print("  ✅ VERDICT: Network stress is IDENTICAL between runs.")
-        print("     The seed fix is working for netem conditions.")
+        print("  [OK] VERDICT: Network stress is IDENTICAL between runs.")
+        print("       The seed fix is working for netem conditions.")
     else:
-        print(f"  ⚠  VERDICT: {total_mismatches}/{n} stress steps differ ({match_pct:.1f}% match).")
+        print(f"  [WARN] VERDICT: {total_mismatches}/{n} stress steps differ ({match_pct:.1f}% match).")
         print()
         print("  ROOT CAUSE: bash $RANDOM in dwell() is unseeded.")
         print("  FIX: Add  RANDOM=20260101  near the top of both shell scripts")

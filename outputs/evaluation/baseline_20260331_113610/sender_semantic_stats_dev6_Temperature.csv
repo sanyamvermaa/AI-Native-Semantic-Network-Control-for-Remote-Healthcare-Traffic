@@ -1,7 +1,0 @@
-timestamp,device_id,device_type,current_command,current_mode,total_samples,total_sent,total_suppressed,raw_sent,raw_suppressed,delta_sent,delta_suppressed,summary_sent,summary_suppressed,critical_only_sent,critical_only_suppressed
-1774957026.810399,6,Temperature,FULL_ECG,RAW,2,2,0,2,0,0,0,0,0,0,0
-1774957056.812631,6,Temperature,FULL_ECG,RAW,3,3,0,3,0,0,0,0,0,0,0
-1774957086.822362,6,Temperature,FULL_ECG,RAW,4,4,0,4,0,0,0,0,0,0,0
-1774957116.831239,6,Temperature,FULL_ECG,RAW,5,5,0,5,0,0,0,0,0,0,0
-1774957146.835458,6,Temperature,FULL_ECG,RAW,6,6,0,6,0,0,0,0,0,0,0
-1774957176.843704,6,Temperature,FULL_ECG,RAW,7,7,0,7,0,0,0,0,0,0,0

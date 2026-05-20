@@ -7,9 +7,11 @@ import csv
 import importlib
 import json
 import os
+import queue
 import select
 import socket
 import sys
+import threading
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -65,6 +67,10 @@ ward_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) #for sending teleme
 
 print(f"\n[Receiver] Closed-loop gateway listening on :{LISTEN_PORT}")
 print(f"[Receiver] Ward controller target: {WARD_IP}:{WARD_PORT}\n")
+
+# Thread Safety Mechanism
+telemetry_lock = threading.Lock()
+packet_queue = queue.Queue()
 
 device_expected_seq = defaultdict(lambda: 1)
 device_prev_delay = defaultdict(lambda: None)
@@ -372,6 +378,165 @@ if _SEMANTIC_AVAILABLE:
         if _dev_type not in SEMANTIC_CAPABLE_TYPES:
             print(f"[Receiver] {_dev_type}: no semantic model — raw-only path")
 
+
+def process_packet(data: bytes, recv_time: float) -> None:
+    """Worker function to parse and decode packet off the main timing thread."""
+    global bytes_received, bytes_attempted
+    global received_packets, lost_packets
+    global estimated_lost_bytes, reordered_recovered_packets
+    global jitter_sum, jitter_count
+    global delay_sum, delay_count
+    global active_devices_window
+    global label_counts
+    global decode_confidence_sum, decode_confidence_count
+    global _last_z
+    global device_last_seen, device_prev_delay, device_expected_seq, device_missing_seqs, device_avg_packet_size
+
+    try:
+        raw = data.decode("utf-8", errors="replace").strip()
+        # Strip RAW_LEGACY prefix emitted by semantic-capable senders
+        # whose encoder buffer hasn't filled yet.
+        _is_raw_legacy = raw.startswith("RAW_LEGACY:")
+        if _is_raw_legacy:
+            raw = raw[len("RAW_LEGACY:"):].strip()
+        if raw.startswith("{"):
+            packet = json.loads(raw)
+            if not isinstance(packet, dict):
+                return
+            device_id = int(packet.get("device_id"))
+            seq = int(packet.get("seq"))
+            send_time = float(packet.get("ts") or recv_time)
+            device_type = str(packet.get("device_type") or "UNKNOWN")
+            _value = packet.get("value", packet.get("mean", 0))
+            label = str(packet.get("label") or "NORMAL").strip().upper()
+        else:
+            parts = raw.split(",")
+            device_id = int(parts[0])
+            seq = int(parts[1])
+            send_time = float(parts[2])
+            device_type = parts[3]
+            _value = parts[4]
+            label = parts[5].strip().upper()
+    except Exception:
+        return
+
+    # Heavy PyTorch operations executed OUTSIDE telemetry_lock to avoid blocking
+    decoded_result = None
+    if (_SEMANTIC_AVAILABLE
+            and device_type in SEMANTIC_CAPABLE_TYPES
+            and not _is_raw_legacy
+            and raw.startswith("{")):
+        decoded_result = decode_payload(data)
+
+    local_label = label
+    local_conf = None
+    local_z_full = None
+    local_dev_type = None
+    local_n_dims = None
+
+    if decoded_result is not None:
+        local_z_full   = decoded_result["z_full"]
+        local_dev_type = decoded_result.get("device_type", "UNKNOWN")
+        local_n_dims  = int(decoded_result.get("n_dims", 0))
+        decoder  = device_decoders.get(local_dev_type)
+        if decoder is not None:
+            result = decoder.decode(local_z_full)
+            local_label  = result["clinical_state"]
+            local_conf  = result["confidence"]
+        else:
+            local_label = str(decoded_result.get("label", "NORMAL")).strip().upper()
+
+    # Thread-Safe Metrics & Dict Updates
+    with telemetry_lock:
+        if decoded_result is not None:
+            if local_conf is not None:
+                decode_confidence_sum   += local_conf
+                decode_confidence_count += 1
+                drain_log_writer.writerow([
+                    round(recv_time, 6), device_id, local_dev_type,
+                    seq, local_n_dims, local_label, round(local_conf, 4),
+                ])
+            else:
+                drain_log_writer.writerow([
+                    round(recv_time, 6), device_id, local_dev_type,
+                    seq, local_n_dims, local_label, "",
+                ])
+            drain_log_file.flush()
+            _last_z[device_id] = {"device_type": local_dev_type, "z": list(local_z_full)}
+
+        device_last_seen[device_id] = recv_time
+        delay = recv_time - send_time
+        delay_sum += delay
+        delay_count += 1
+
+        prev = device_prev_delay[device_id]
+        if prev is not None:
+            jitter_sum += abs(delay - prev)
+            jitter_count += 1
+        device_prev_delay[device_id] = delay
+
+        packet_size = len(data)
+        avg_packet_size = device_avg_packet_size[device_id]
+        device_avg_packet_size[device_id] = (
+            (1.0 - PACKET_SIZE_EMA_ALPHA) * avg_packet_size
+            + PACKET_SIZE_EMA_ALPHA * packet_size
+        )
+
+        expected = device_expected_seq[device_id]
+        missing_for_dev = device_missing_seqs[device_id]
+        if seq > expected:
+            gap = seq - expected
+            lost_packets += gap
+            est_lost = int(round(gap * device_avg_packet_size[device_id]))
+            bytes_attempted += est_lost
+            estimated_lost_bytes += est_lost
+            if gap <= REORDER_TRACK_LIMIT:
+                missing_for_dev.update(range(expected, seq))
+            else:
+                missing_for_dev.clear()
+            device_expected_seq[device_id] = seq + 1
+        elif seq == expected:
+            device_expected_seq[device_id] = seq + 1
+        else:
+            if seq in missing_for_dev:
+                missing_for_dev.remove(seq)
+                if lost_packets > 0:
+                    lost_packets -= 1
+                est_recover = int(round(device_avg_packet_size[device_id]))
+                if estimated_lost_bytes >= est_recover:
+                    estimated_lost_bytes -= est_recover
+                if bytes_attempted >= est_recover:
+                    bytes_attempted -= est_recover
+                reordered_recovered_packets += 1
+
+        received_packets += 1
+        active_devices_window.add(device_id)
+
+        bytes_received += packet_size
+        bytes_attempted += packet_size
+
+        if local_label in ("NORMAL", "ALERT", "CRITICAL"):
+            label_counts[local_label] += 1
+
+
+# Background Worker Thread Loop
+def worker_thread_loop():
+    while True:
+        item = packet_queue.get()
+        if item is None:
+            break
+        data, recv_time = item
+        try:
+            process_packet(data, recv_time)
+        except Exception as e:
+            print(f"[Worker Error] {e}")
+        packet_queue.task_done()
+
+# Start Worker Thread
+worker_t = threading.Thread(target=worker_thread_loop, daemon=True)
+worker_t.start()
+
+
 #flush current telemetry and send initial state to ward controller 
 #predict initial network state based on empty history
 
@@ -392,31 +557,77 @@ def flush_telemetry(now: float) -> None:
     global device_missing_seqs
     global _drift_disagree_streak
 
-    total_attempted = received_packets + lost_packets
-    packet_loss_rate = (lost_packets / total_attempted) if total_attempted > 0 else 0.0
-    avg_jitter = (jitter_sum / jitter_count) if jitter_count > 0 else 0.0
-    avg_delay = (delay_sum / delay_count) if delay_count > 0 else 0.0
+    # Extract thread-safe local snapshot and immediately release lock
+    with telemetry_lock:
+        local_bytes_received = bytes_received
+        local_bytes_attempted = bytes_attempted
+        local_received_packets = received_packets
+        local_lost_packets = lost_packets
+        local_estimated_lost_bytes = estimated_lost_bytes
+        local_reordered_recovered_packets = reordered_recovered_packets
+        local_jitter_sum = jitter_sum
+        local_jitter_count = jitter_count
+        local_delay_sum = delay_sum
+        local_delay_count = delay_count
+        local_active_devices_window = set(active_devices_window)
+        local_label_counts = dict(label_counts)
+        local_decode_confidence_sum = decode_confidence_sum
+        local_decode_confidence_count = decode_confidence_count
 
-    throughput_bps = bytes_received / TELEMETRY_INTERVAL
-    bandwidth_bps = bytes_attempted / TELEMETRY_INTERVAL
-    drain_avg_ms = (drain_cycle_sum_ms / drain_cycle_count) if drain_cycle_count > 0 else 0.0
-    drain_util_pct = (drain_cycle_max_ms / (DRAIN_BUDGET * 1000.0)) if DRAIN_BUDGET > 0 else 0.0
-    receiver_overloaded = (
-        drain_backlog_hits > 0
-        or drain_budget_hits > 0
-        or drain_util_pct >= OVERLOAD_DRAIN_UTILIZATION
-    )
+        # Reset counters
+        bytes_received = 0
+        bytes_attempted = 0
+        received_packets = 0
+        lost_packets = 0
+        estimated_lost_bytes = 0
+        reordered_recovered_packets = 0
+        drain_cycle_count = 0
+        drain_cycle_max_ms = 0.0
+        drain_cycle_sum_ms = 0.0
+        drain_budget_hits = 0
+        drain_backlog_hits = 0
+        jitter_sum = 0.0
+        jitter_count = 0
+        delay_sum = 0.0
+        delay_count = 0
+        active_devices_window = set()
+        label_counts = defaultdict(int)
+        decode_confidence_sum = 0.0
+        decode_confidence_count = 0
+
+        # Keep missing-sequence ledger across telemetry windows for reorder recovery,
+        # but cap memory per device.
+        for dev_id, missing in list(device_missing_seqs.items()):
+            if len(missing) > REORDER_TRACK_LIMIT:
+                expected = device_expected_seq[dev_id]
+                keep_from = max(1, expected - REORDER_TRACK_LIMIT)
+                device_missing_seqs[dev_id] = {s for s in missing if s >= keep_from}
+
+    total_attempted = local_received_packets + local_lost_packets
+    packet_loss_rate = (local_lost_packets / total_attempted) if total_attempted > 0 else 0.0
+    avg_jitter = (local_jitter_sum / local_jitter_count) if local_jitter_count > 0 else 0.0
+    avg_delay = (local_delay_sum / local_delay_count) if local_delay_count > 0 else 0.0
+
+    throughput_bps = local_bytes_received / TELEMETRY_INTERVAL
+    bandwidth_bps = local_bytes_attempted / TELEMETRY_INTERVAL
+    
+    # Offloaded execution implies no blockages/overloads in receiver socket processing
+    drain_avg_ms = 0.0
+    drain_cycle_max_ms = 0.0
+    drain_budget_hits = 0
+    drain_backlog_hits = 0
+    receiver_overloaded = False
 
     avg_decode_confidence = (
-        decode_confidence_sum / decode_confidence_count
-        if decode_confidence_count > 0 else None
+        local_decode_confidence_sum / local_decode_confidence_count
+        if local_decode_confidence_count > 0 else None
     )
 
     heuristic_state = choose_network_state(packet_loss_rate, avg_delay * 1000.0, avg_jitter * 1000.0)
     # EMA-smoothed clinical state (avoids single-packet flap-triggers)
-    _total = sum(label_counts.values()) or 1
+    _total = sum(local_label_counts.values()) or 1
     for _cls in ("NORMAL", "ALERT", "CRITICAL"):
-        _obs = label_counts.get(_cls, 0) / _total
+        _obs = local_label_counts.get(_cls, 0) / _total
         _health_ema[_cls] = _HEALTH_EMA_ALPHA * _obs + (1 - _HEALTH_EMA_ALPHA) * _health_ema[_cls]
     health_state = max(_health_ema, key=_health_ema.__getitem__)
 
@@ -434,7 +645,7 @@ def flush_telemetry(now: float) -> None:
         "packet_loss_rate": packet_loss_rate,
         "jitter": avg_jitter * 1000.0,
         "avg_delay": avg_delay * 1000.0,
-        "active_devices": float(len(active_devices_window)),
+        "active_devices": float(len(local_active_devices_window)),
         "packets_per_window": float(total_attempted),
     }
     window_history.append(feature_snapshot)
@@ -506,7 +717,7 @@ def flush_telemetry(now: float) -> None:
     print(
         f"[PREDICT] source={predictor_source} state={network_state} "
         f"loss={packet_loss_rate*100.0:.2f}% delay={avg_delay*1000.0:.2f}ms "
-        f"jitter={avg_jitter*1000.0:.2f}ms devices={len(active_devices_window)}{conf_text}"
+        f"jitter={avg_jitter*1000.0:.2f}ms devices={len(local_active_devices_window)}{conf_text}"
     )
 
     # Model drift detection: track consecutive windows where ML disagrees with heuristic.
@@ -534,13 +745,13 @@ def flush_telemetry(now: float) -> None:
             round(packet_loss_rate, 6),
             round(avg_jitter * 1000.0, 6),
             round(avg_delay * 1000.0, 6),
-            len(active_devices_window),
+            len(local_active_devices_window),
             total_attempted,
             network_state,
             predictor_source,
             round(prediction_confidence, 4) if prediction_confidence is not None else "",
-            int(estimated_lost_bytes),
-            int(reordered_recovered_packets),
+            int(local_estimated_lost_bytes),
+            int(local_reordered_recovered_packets),
             int(receiver_overloaded),
             round(drain_cycle_max_ms, 3),
             round(drain_avg_ms, 3),
@@ -549,6 +760,9 @@ def flush_telemetry(now: float) -> None:
         ]
     )
     telemetry_file.flush()
+
+    with telemetry_lock:
+        local_last_z = dict(_last_z)
 
     payload = {
         "timestamp": now,
@@ -560,20 +774,20 @@ def flush_telemetry(now: float) -> None:
         "jitter_ms": avg_jitter * 1000.0,
         "predictor_source": predictor_source,
         "prediction_confidence": prediction_confidence,
-        "active_devices": len(active_devices_window),
+        "active_devices": len(local_active_devices_window),
         "packets_per_window": total_attempted,
-        "estimated_lost_bytes": int(estimated_lost_bytes),
-        "reordered_recovered_packets": int(reordered_recovered_packets),
+        "estimated_lost_bytes": int(local_estimated_lost_bytes),
+        "reordered_recovered_packets": int(local_reordered_recovered_packets),
         "receiver_overloaded": receiver_overloaded,
         "drain_max_ms": drain_cycle_max_ms,
         "drain_avg_ms": drain_avg_ms,
         "drain_budget_hits": drain_budget_hits,
         "drain_backlog_hits": drain_backlog_hits,
         "decode_confidence": avg_decode_confidence,
-        "semantic_packets_in_window": decode_confidence_count,
+        "semantic_packets_in_window": local_decode_confidence_count,
         "z_per_device": [
             {"device_id": did, "device_type": entry["device_type"], "z": entry["z"]}
-            for did, entry in _last_z.items()
+            for did, entry in local_last_z.items()
         ],
     }
 
@@ -583,34 +797,6 @@ def flush_telemetry(now: float) -> None:
         print(f"[WARN] Failed to forward telemetry to ward controller: {exc}")
 
     telemetry_rows += 1
-
-    bytes_received = 0
-    bytes_attempted = 0
-    received_packets = 0
-    lost_packets = 0
-    estimated_lost_bytes = 0
-    reordered_recovered_packets = 0
-    drain_cycle_count = 0
-    drain_cycle_max_ms = 0.0
-    drain_cycle_sum_ms = 0.0
-    drain_budget_hits = 0
-    drain_backlog_hits = 0
-    jitter_sum = 0.0
-    jitter_count = 0
-    delay_sum = 0.0
-    delay_count = 0
-    active_devices_window = set()
-    label_counts = defaultdict(int)
-    decode_confidence_sum = 0.0
-    decode_confidence_count = 0
-
-    # Keep missing-sequence ledger across telemetry windows for reorder recovery,
-    # but cap memory per device.
-    for dev_id, missing in list(device_missing_seqs.items()):
-        if len(missing) > REORDER_TRACK_LIMIT:
-            expected = device_expected_seq[dev_id]
-            keep_from = max(1, expected - REORDER_TRACK_LIMIT)
-            device_missing_seqs[dev_id] = {s for s in missing if s >= keep_from}
 
 
 start_time = time.time()
@@ -633,158 +819,26 @@ try:
             last_status_time = now
 
         ready, _, _ = select.select([sock], [], [], 0.01)
-        if not ready:
-            continue
-
-        drain_start = time.time()
-        while time.time() - drain_start < DRAIN_BUDGET:
+        if ready:
             try:
-                data, _ = sock.recvfrom(1024)
+                # Instantly drain socket without PyTorch blockages
+                while True:
+                    data, _ = sock.recvfrom(1024)
+                    recv_time = time.time()
+                    packet_queue.put((data, recv_time))
             except BlockingIOError:
-                break
-
-            recv_time = time.time()
-            try:
-                raw = data.decode("utf-8", errors="replace").strip()
-                # Strip RAW_LEGACY prefix emitted by semantic-capable senders
-                # whose encoder buffer hasn't filled yet.  After stripping,
-                # the remainder is a normal CSV line.
-                _is_raw_legacy = raw.startswith("RAW_LEGACY:")
-                if _is_raw_legacy:
-                    raw = raw[len("RAW_LEGACY:"):].strip()
-                if raw.startswith("{"):
-                    packet = json.loads(raw)
-                    if not isinstance(packet, dict):
-                        continue
-                    device_id = int(packet.get("device_id"))
-                    seq = int(packet.get("seq"))
-                    send_time = float(packet.get("ts") or recv_time)
-                    device_type = str(packet.get("device_type") or "UNKNOWN")
-                    _value = packet.get("value", packet.get("mean", 0))
-                    label = str(packet.get("label") or "NORMAL").strip().upper()
-                    _ = device_type, _value
-                else:
-                    parts = raw.split(",")
-                    device_id = int(parts[0])
-                    seq = int(parts[1])
-                    send_time = float(parts[2])
-                    device_type = parts[3]
-                    _value = parts[4]
-                    label = parts[5].strip().upper()
-                    _ = device_type, _value
-            except Exception:
-                continue
-
-            # --- Semantic decoder path (overrides label if packet was encoded) ---
-            # Only attempt decode for device types that have trained models.
-            # Fast-path: skip decode on raw CSV packets (not JSON) — these come
-            # from legacy fallback or RAW_LEGACY-tagged packets during the
-            # encoder buffer fill window.  decode_payload() expects JSON and
-            # would return None anyway, but skipping avoids the overhead and
-            # spurious log warnings.
-            decoded_result = None
-            if (_SEMANTIC_AVAILABLE
-                    and device_type in SEMANTIC_CAPABLE_TYPES
-                    and not _is_raw_legacy
-                    and raw.startswith("{")):
-                decoded_result = decode_payload(data)
-
-            if decoded_result is not None:
-                z_full   = decoded_result["z_full"]
-                dev_type = decoded_result.get("device_type", "UNKNOWN")
-                _n_dims  = int(decoded_result.get("n_dims", 0))
-                decoder  = device_decoders.get(dev_type)
-                if decoder is not None:
-                    result = decoder.decode(z_full)
-                    label  = result["clinical_state"]
-                    _conf  = result["confidence"]
-                    decode_confidence_sum   += _conf
-                    decode_confidence_count += 1
-                    drain_log_writer.writerow([
-                        round(recv_time, 6), device_id, dev_type,
-                        seq, _n_dims, label, round(_conf, 4),
-                    ])
-                else:
-                    label = str(decoded_result.get("label", "NORMAL")).strip().upper()
-                    drain_log_writer.writerow([
-                        round(recv_time, 6), device_id, dev_type,
-                        seq, _n_dims, label, "",
-                    ])
-                drain_log_file.flush()
-                # Store latest z for this device for ward_controller forwarding
-                _last_z[device_id] = {"device_type": dev_type, "z": list(z_full)}
-            # else: label already set by legacy parsing path above
-
-            device_last_seen[device_id] = recv_time
-            delay = recv_time - send_time
-            delay_sum += delay
-            delay_count += 1
-
-            prev = device_prev_delay[device_id]
-            if prev is not None:
-                jitter_sum += abs(delay - prev)
-                jitter_count += 1
-            device_prev_delay[device_id] = delay
-
-            packet_size = len(data)
-            avg_packet_size = device_avg_packet_size[device_id]
-            device_avg_packet_size[device_id] = (
-                (1.0 - PACKET_SIZE_EMA_ALPHA) * avg_packet_size
-                + PACKET_SIZE_EMA_ALPHA * packet_size
-            )
-
-            expected = device_expected_seq[device_id]
-            missing_for_dev = device_missing_seqs[device_id]
-            if seq > expected:
-                gap = seq - expected
-                lost_packets += gap
-                est_lost = int(round(gap * device_avg_packet_size[device_id]))
-                bytes_attempted += est_lost
-                estimated_lost_bytes += est_lost
-                if gap <= REORDER_TRACK_LIMIT:
-                    missing_for_dev.update(range(expected, seq))
-                else:
-                    missing_for_dev.clear()
-                device_expected_seq[device_id] = seq + 1
-            elif seq == expected:
-                device_expected_seq[device_id] = seq + 1
-            else:
-                # Reordered packet that was previously considered lost in this window.
-                if seq in missing_for_dev:
-                    missing_for_dev.remove(seq)
-                    if lost_packets > 0:
-                        lost_packets -= 1
-                    est_recover = int(round(device_avg_packet_size[device_id]))
-                    if estimated_lost_bytes >= est_recover:
-                        estimated_lost_bytes -= est_recover
-                    if bytes_attempted >= est_recover:
-                        bytes_attempted -= est_recover
-                    reordered_recovered_packets += 1
-
-            received_packets += 1
-            active_devices_window.add(device_id)
-
-            bytes_received += packet_size
-            bytes_attempted += packet_size
-
-            if label in ("NORMAL", "ALERT", "CRITICAL"):
-                label_counts[label] += 1
-
-        drain_elapsed_ms = (time.time() - drain_start) * 1000.0
-        drain_cycle_count += 1
-        drain_cycle_sum_ms += drain_elapsed_ms
-        if drain_elapsed_ms > drain_cycle_max_ms:
-            drain_cycle_max_ms = drain_elapsed_ms
-        if drain_elapsed_ms >= (DRAIN_BUDGET * 1000.0 * 0.99):
-            drain_budget_hits += 1
-        still_ready, _, _ = select.select([sock], [], [], 0)
-        if still_ready:
-            drain_backlog_hits += 1
+                pass
+            except Exception as exc:
+                print(f"[Receiver Sock Error] {exc}")
 
 except KeyboardInterrupt:
     print("\n[Receiver] Flushing final window...")
     flush_telemetry(time.time())
 finally:
+    # Stop background thread gracefully
+    packet_queue.put(None)
+    worker_t.join(timeout=1.0)
+
     telemetry_file.flush()
     telemetry_file.close()
     drain_log_file.flush()

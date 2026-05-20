@@ -1236,7 +1236,7 @@ def generate_summary_report(
     emit()
 
     os.makedirs(out_dir, exist_ok=True)
-    with open(os.path.join(out_dir, "summary_report.txt"), "w") as fh:
+    with open(os.path.join(out_dir, "summary_report.txt"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
     print(f"  ✓ summary_report.txt")
 
@@ -1372,7 +1372,7 @@ def main() -> None:
                 src = os.path.join(args.output_dir, f"fig1_network_timeline.{f}")
                 dst = os.path.join(args.output_dir, f"fig1_network_timeline_baseline.{f}")
                 if os.path.exists(src):
-                    os.rename(src, dst)
+                    os.replace(src, dst)
 
     if 2 in figs_to_run:
         print(" Fig 2: Throughput timeline")

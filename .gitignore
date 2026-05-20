@@ -38,3 +38,9 @@ tempCodeRunnerFile.py
 outputs/
 outputs/results
 outputs/evaluation
+
+# Evaluation archives and artifacts
+*.zip
+evaluation_files/
+ANSC_Final_Report.pdf
+scripts/evaluation/_*.py

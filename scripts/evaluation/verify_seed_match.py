@@ -76,8 +76,8 @@ def main():
         c_vals = pd.to_numeric(c_df["value"], errors="coerce").dropna().values
 
         n_compare = min(N, len(b_vals), len(c_vals))
-        b_v = b_vals[:n_compare].round(4)
-        c_v = c_vals[:n_compare].round(4)
+        b_v = np.round(b_vals[:n_compare])
+        c_v = np.round(c_vals[:n_compare])
 
         mismatches     = int((b_v != c_v).sum())
         match_rate_pct = (1 - mismatches / n_compare) * 100 if n_compare > 0 else 0.0

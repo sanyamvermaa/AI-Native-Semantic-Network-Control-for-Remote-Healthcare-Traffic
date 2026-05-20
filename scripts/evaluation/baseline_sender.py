@@ -354,14 +354,25 @@ def main() -> None:
         f"mode=RAW (static) interval={interval}s"
     )
 
+    next_tx_time = time.time()
     try:
         while True:
+            now = time.time()
+            sleep_timeout = next_tx_time - now
+            if sleep_timeout > 0:
+                time.sleep(sleep_timeout)
+
+            # Prevent drift catch-up loops if the system experiences a massive CPU delay
+            if next_tx_time < time.time() - interval:
+                next_tx_time = time.time()
+
+            next_tx_time += interval
             now = time.time()
 
             # Burst logic — identical to health_sender.py
             if burst_mode and now > burst_end_time:
                 burst_mode = False
-            if not burst_mode and random.random() < profile["burst_prob"]:
+            if not burst_mode and random.random() < profile["burst_prob"] * interval:
                 burst_mode     = True
                 burst_end_time = now + profile["burst_dur"]
 
@@ -417,7 +428,6 @@ def main() -> None:
                 stat_f.flush()
                 last_stats_flush = now
 
-            time.sleep(interval)
 
     except KeyboardInterrupt:
         pass

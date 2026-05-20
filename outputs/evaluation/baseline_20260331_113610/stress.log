@@ -1,9 +1,0 @@
-[STRESS] profile=Stable loss=0.742% delay=23.546ms jitter=3.709ms
-[STRESS] profile=Unstable loss=3.736% delay=54.726ms jitter=11.129ms
-[STRESS] profile=Critical loss=14.208% delay=224.166ms jitter=58.833ms
-[STRESS] profile=Unstable loss=3.681% delay=53.626ms jitter=10.896ms
-[STRESS] profile=Stable loss=0.653% delay=21.325ms jitter=3.265ms
-[STRESS] profile=Critical loss=16.735% delay=274.701ms jitter=68.940ms
-[STRESS] profile=Stable loss=0.277% delay=11.917ms jitter=1.383ms
-[STRESS] profile=Unstable loss=5.602% delay=92.039ms jitter=19.058ms
-[STRESS] profile=Critical loss=17.649% delay=292.986ms jitter=72.597ms
