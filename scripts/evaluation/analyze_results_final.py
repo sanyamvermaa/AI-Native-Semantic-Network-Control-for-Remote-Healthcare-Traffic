@@ -1182,12 +1182,12 @@ def generate_summary_report(
         emit(f"    Loss  : {safe_mean(df,'packet_loss_rate')*100:.2f}%")
         emit(f"    Delay : {safe_mean(df,'avg_delay'):.1f} ms")
         emit(f"    Jitter: {safe_mean(df,'jitter'):.1f} ms")
-        emit(f"    Thr   : {safe_mean(df,'throughput_bps')/1000:.1f} kbps")
+        emit(f"    Load  : {safe_mean(df,'throughput_bps')/1000:.1f} kbps")
         emit(f"    State dist: " +
              ", ".join(f"{s}={len(df[df['network_condition']==s])}"
                        for s in STATE_ORDER))
 
-    section("2. Throughput Savings (CL vs Baseline)")
+    section("2. Network Load Savings (CL vs Baseline)")
     if not b_tel.empty and not cl_tel.empty:
         for s in STATE_ORDER:
             bm = b_tel[b_tel['network_condition']==s]['throughput_bps'].mean()

@@ -112,50 +112,49 @@ def save_fig(fig, out_dir, name, fmts=("png","pdf")):
 
 def fig_a_grouped_bar(bl, cl, out_dir, fmts):
     bl_a, cl_a = active(bl), active(cl)
-    metrics = {
-        "Packet Loss\n(%)":    (bl_a["packet_loss_rate"].mean()*100,
-                                cl_a["packet_loss_rate"].mean()*100),
-        "Avg. Delay\n(ms)":    (bl_a["avg_delay"].mean(),
-                                cl_a["avg_delay"].mean()),
-        "Jitter\n(ms)":        (bl_a["jitter"].mean(),
-                                cl_a["jitter"].mean()),
-        "Throughput\n(kbps)":  (bl_a["throughput_bps"].mean()/1000,
-                                cl_a["throughput_bps"].mean()/1000),
-    }
+    
+    # We use a 2x2 grid of subplots so that each metric has its own y-axis scale.
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8.5))
+    fig.subplots_adjust(hspace=0.35, wspace=0.32)
+    
+    metrics = [
+        ("Packet Loss (%)",      bl_a["packet_loss_rate"].mean()*100,  cl_a["packet_loss_rate"].mean()*100),
+        ("Avg. Delay (ms)",      bl_a["avg_delay"].mean(),             cl_a["avg_delay"].mean()),
+        ("Jitter (ms)",          bl_a["jitter"].mean(),                cl_a["jitter"].mean()),
+        ("Network Load (kbps)",  bl_a["throughput_bps"].mean()/1000,   cl_a["throughput_bps"].mean()/1000),
+    ]
 
-    labels = list(metrics.keys())
-    bl_vals = [v[0] for v in metrics.values()]
-    cl_vals = [v[1] for v in metrics.values()]
-
-    x  = np.arange(len(labels))
-    w  = 0.35
-    fig, ax = plt.subplots(figsize=(9, 5))
-
-    bars_bl = ax.bar(x - w/2, bl_vals, w, label="Baseline",    color=BL_COLOR, alpha=0.85, edgecolor="white")
-    bars_cl = ax.bar(x + w/2, cl_vals, w, label="Closed-Loop", color=CL_COLOR, alpha=0.85, edgecolor="white")
-
-    for bar in list(bars_bl) + list(bars_cl):
-        h = bar.get_height()
-        ax.text(bar.get_x() + bar.get_width()/2, h + h*0.02,
-                f"{h:.2f}", ha="center", va="bottom", fontsize=8.5)
-
-    # Improvement annotations
-    for i, (bv, cv) in enumerate(zip(bl_vals, cl_vals)):
-        if bv > 0:
-            pct = (bv - cv) / bv * 100
+    for ax, (label, bl_val, cl_val) in zip(axes.flat, metrics):
+        x = np.arange(1)
+        w = 0.35
+        
+        bars_bl = ax.bar(x - w/2, [bl_val], w, label="Baseline",    color=BL_COLOR, alpha=0.85, edgecolor="white")
+        bars_cl = ax.bar(x + w/2, [cl_val], w, label="Closed-Loop", color=CL_COLOR, alpha=0.85, edgecolor="white")
+        
+        # Add value labels
+        for bar in list(bars_bl) + list(bars_cl):
+            h = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2, h + h*0.02,
+                    f"{h:.2f}", ha="center", va="bottom", fontsize=8.5)
+        
+        # Improvement annotation
+        if bl_val > 0:
+            pct = (bl_val - cl_val) / bl_val * 100
             sign = "↓" if pct > 0 else "↑"
             color = "#27ae60" if pct > 0 else "#e74c3c"
-            ax.text(x[i], max(bv, cv) * 1.15,
-                    f"{sign}{abs(pct):.1f}%", ha="center", fontsize=8,
+            ax.text(0, max(bl_val, cl_val) * 1.15,
+                    f"{sign}{abs(pct):.1f}%", ha="center", fontsize=8.5,
                     color=color, fontweight="bold")
+            
+        ax.set_xticks([0])
+        ax.set_xticklabels(["Overall Mean"], fontsize=9)
+        ax.set_ylabel(label, fontsize=9.5)
+        ax.set_title(label.split("(")[0].strip(), fontsize=10.5, fontweight="bold")
+        ax.set_ylim(0, max(bl_val, cl_val) * 1.35)
+        ax.legend(loc="upper right", framealpha=0.9, fontsize=8)
 
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, fontsize=9.5)
-    ax.set_ylabel("Value")
-    ax.set_title("Figure A — Mean Network Metrics: Baseline vs Closed-Loop\n"
-                 "(arrows show % change; ↓ = improvement)", pad=10)
-    ax.legend(loc="upper right", framealpha=0.9)
-    plt.tight_layout()
+    fig.suptitle("Figure A — Mean Network Metrics: Baseline vs Closed-Loop\n"
+                 "(arrows show % change; ↓ = improvement)", fontsize=11.5, fontweight="bold", y=0.98)
     save_fig(fig, out_dir, "figA_grouped_bar", fmts)
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -209,8 +208,8 @@ def fig_c_throughput_timeline(bl, cl, out_dir, fmts):
                     color=CL_COLOR, alpha=0.12)
 
     ax.set_xlabel("Elapsed Time (s)")
-    ax.set_ylabel("Throughput (kbps)")
-    ax.set_title("Figure C — Throughput over Time: Baseline vs Closed-Loop\n"
+    ax.set_ylabel("Network Load (kbps)")
+    ax.set_title("Figure C — Network Load over Time: Baseline vs Closed-Loop\n"
                  "(lower CL = semantic suppression saving bandwidth)")
     ax.legend(framealpha=0.9)
     ax.set_ylim(bottom=0)
@@ -282,28 +281,33 @@ def fig_e_state_bar(bl, cl, out_dir, fmts):
     bl_pcts = state_pcts(bl)
     cl_pcts = state_pcts(cl)
 
-    fig, axes = plt.subplots(1, 2, figsize=(10, 5.5), sharey=True)
+    # Single subplot showing Baseline and CL side-by-side for each state
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    
+    states_caps = [s.upper() for s in STATE_ORDER] # ["STABLE", "UNSTABLE", "CRITICAL"]
+    bl_vals = [bl_pcts[s] for s in STATE_ORDER]
+    cl_vals = [cl_pcts[s] for s in STATE_ORDER]
+    
+    x = np.arange(len(STATE_ORDER))
+    w = 0.35
+    
+    bars_bl = ax.bar(x - w/2, bl_vals, w, label="Baseline",    color=BL_COLOR, alpha=0.85, edgecolor="white")
+    bars_cl = ax.bar(x + w/2, cl_vals, w, label="Closed-Loop", color=CL_COLOR, alpha=0.85, edgecolor="white")
+    
+    # Add value labels
+    for bar in list(bars_bl) + list(bars_cl):
+        h = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width()/2, h + 0.8,
+                f"{h:.1f}%", ha="center", va="bottom", fontsize=9.5, fontweight="bold")
 
-    for ax, pcts, label, color in [
-        (axes[0], bl_pcts, "Baseline",    BL_COLOR),
-        (axes[1], cl_pcts, "Closed-Loop", CL_COLOR),
-    ]:
-        bars = ax.bar(STATE_ORDER,
-                      [pcts[s] for s in STATE_ORDER],
-                      color=[STATE_COLORS[s] for s in STATE_ORDER],
-                      edgecolor="white", linewidth=0.8, alpha=0.80)
-        for bar, s in zip(bars, STATE_ORDER):
-            h = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2, h + 0.8,
-                    f"{h:.1f}%", ha="center", fontsize=9.5, fontweight="bold")
-        ax.set_title(label, pad=8)
-        ax.set_ylabel("% of time windows")
-        ax.set_ylim(0, 70)
-        ax.set_xlabel("Network State")
-
-    fig.suptitle("Figure E — Network State Distribution: Baseline vs Closed-Loop\n"
-                 "(closed-loop should show more Stable, less Critical)",
-                 fontsize=11, fontweight="bold", y=1.01)
+    ax.set_xticks(x)
+    ax.set_xticklabels(states_caps, fontsize=10, fontweight="bold")
+    ax.set_ylabel("% of Time Windows", fontsize=10)
+    ax.set_ylim(0, 100) # up to mark scale
+    ax.set_xlabel("Network State", fontsize=10, fontweight="bold")
+    ax.set_title("Figure E — Network State Distribution: Baseline vs Closed-Loop\n"
+                 "(closed-loop increases STABLE and reduces CRITICAL periods)", fontsize=11, fontweight="bold", pad=10)
+    ax.legend(loc="upper right", framealpha=0.9)
     plt.tight_layout()
     save_fig(fig, out_dir, "figE_state_distribution", fmts)
 
@@ -401,7 +405,7 @@ def fig_h_four_panel(bl, cl, out_dir, fmts):
         ("packet_loss_rate_sm", "packet_loss_rate", "Packet Loss (%)", lambda v: v*100),
         ("avg_delay_sm",        "avg_delay",         "Avg. Delay (ms)", lambda v: v),
         ("jitter_sm",           "jitter",             "Jitter (ms)",     lambda v: v),
-        ("throughput_bps_sm",   "throughput_bps",     "Throughput (kbps)", lambda v: v/1000),
+        ("throughput_bps_sm",   "throughput_bps",     "Network Load (kbps)", lambda v: v/1000),
     ]
 
     for ax, (sm_col, raw_col, ylabel, tfm) in zip(axes.flat, panels):
@@ -462,7 +466,7 @@ def main():
         ("Loss",       "packet_loss_rate", lambda v: v*100, "%"),
         ("Delay",      "avg_delay",         lambda v: v,    "ms"),
         ("Jitter",     "jitter",             lambda v: v,    "ms"),
-        ("Throughput", "throughput_bps",     lambda v: v/1000, "kbps"),
+        ("Network Load", "throughput_bps",     lambda v: v/1000, "kbps"),
     ]:
         bv = tfm(bl_a[col].mean())
         cv = tfm(cl_a[col].mean())
@@ -476,7 +480,7 @@ def main():
         ("Loss",       "packet_loss_rate", lambda v: v*100, "%"),
         ("Delay",      "avg_delay",         lambda v: v,    "ms"),
         ("Jitter",     "jitter",             lambda v: v,    "ms"),
-        ("Throughput", "throughput_bps",     lambda v: v/1000, "kbps"),
+        ("Network Load", "throughput_bps",     lambda v: v/1000, "kbps"),
     ]:
         bv = tfm(bl[col].mean())
         cv = tfm(cl[col].mean())
