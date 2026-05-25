@@ -1282,7 +1282,7 @@ Examples:
                    default=ALL_FIGURES,
                    help=f"Figure numbers to generate (default: all {ALL_FIGURES}).")
     p.add_argument("--format", nargs="+", default=["png"],
-                   choices=["png", "pdf", "svg"],
+                   choices=["png", "pdf", "svg", "eps"],
                    help="Output file format(s) (default: png).")
     p.add_argument("--dpi", type=int, default=180,
                    help="Figure resolution (default: 180).")

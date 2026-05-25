@@ -439,7 +439,7 @@ def main():
     ap.add_argument("--no-pdf",     action="store_true")
     args = ap.parse_args()
 
-    fmts = ["png"] if args.no_pdf else ["png", "pdf"]
+    fmts = ["png"] if args.no_pdf else ["png", "pdf", "eps"]
     out  = args.out
 
     apply_style()
