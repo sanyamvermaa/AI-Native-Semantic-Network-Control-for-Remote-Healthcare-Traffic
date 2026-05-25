@@ -32,15 +32,18 @@ plots/
 scripts/
   setup_namespaces.sh
   dataset_generation/
+    audit_xgboost_leakage.py
     dynamic_traffic_generator.py
+    generate_and_train.sh
     generate_dataset.py
-    health_sender.py
+    generate_live_dataset.sh
+    generate_synthetic_dataset.py
     health_receiver.py
-    run_experiment.sh
+    health_sender.py
+    retrain_on_live_data.py
+    train_from_pipeline.py
     train_model.py
     tune_xgboost.py
-    plot.py
-    bd.py
   closed_loop/
     health_sender.py         — adaptive sender with OU/neurokit2 physiology + semantic codec
     health_receiver.py       — ML network classifier + semantic decoder + telemetry publisher
@@ -52,18 +55,30 @@ scripts/
     train_semantic_codec.py     — Step 1
     semantic_encoder.py         — Runtime encoder/decoder wrapper
     channel_quantizer.py        — Variable-fidelity latent quantization
-    test_step2.py               — Step 2
     inspect_payload.py          — Step 3
-    test_step4.py               — Step 4
     train_patient_fusion.py     — Step 5
     patient_fusion.py           — Runtime patient fusion inference wrapper
+    generate_training_data.py
   evaluation/
     enrich_logs_for_fidelity.py
     semantic_fidelity.py        — Step 6
     baseline_sender.py
     analyze_results.py
+    analyze_results_final.py
     run_closedloop_eval.sh
     run_baseline_eval.sh
+    generate_stress_manifest.py
+    scenario_manifest.csv
+    verify_stress_match.py
+    run_natural_stress_baseline.sh
+    run_natural_stress_closedloop.sh
+    compare_baseline_closedloop.py
+    compare_v2_allrows.py
+    verify_seed_match.py
+    test_live_integration.py
+    _audit_runs.py
+    ANSC_Evaluation_Report.pdf
+    README.md
 ```
 
 ---
@@ -103,13 +118,12 @@ scripts/
 2. `scripts/closed_loop/run_closed_loop_stress_auto.sh [duration] [stage_sec]`
 
 ### Semantic pipeline flow (run in order)
-1. `wsl python3 scripts/semantic/train_semantic_codec.py`
-2. `wsl python3 scripts/semantic/test_step2.py`
+1. `wsl python3 scripts/semantic/generate_training_data.py`
+2. `wsl python3 scripts/semantic/train_semantic_codec.py`
 3. `wsl python3 scripts/semantic/inspect_payload.py`
-4. `wsl python3 scripts/semantic/test_step4.py`
-5. `wsl python3 scripts/semantic/train_patient_fusion.py`
-6. `wsl python3 scripts/evaluation/enrich_logs_for_fidelity.py`
-   `wsl python3 scripts/evaluation/semantic_fidelity.py --logs-dir data/eval_logs`
+4. `wsl python3 scripts/semantic/train_patient_fusion.py`
+5. `wsl python3 scripts/evaluation/enrich_logs_for_fidelity.py`
+6. `wsl python3 scripts/evaluation/semantic_fidelity.py --logs-dir data/eval_logs`
 
 ---
 
@@ -172,7 +186,7 @@ The ward controller issues one of **6 commands** based on the 3×3 network × he
 | `CRITICAL_ONLY` | Transmit only if `clinical_importance ≥ 0.7`; ECG/BP use ML latent encoding |
 
 **Semantic encoding fast-path (ECG + BloodPressure only):**
-- Sender accumulates 200-sample window → `SemanticEncoder.encode()` → 16-dim latent z
+- Sender accumulates 25-sample window → `SemanticEncoder.encode()` → 16-dim latent z
 - `encode_payload()` quantizes z to N dims based on command: 16/16/8/8/4/2
 - Receiver calls `decode_payload()` → `SemanticEncoder.decode()` → `clinical_state` + confidence
 
@@ -230,7 +244,7 @@ The receiver uses **XGBoost** (loaded from `models/best_network_model.pkl`) with
 ## Semantic Pipeline — Steps & Final Results
 
 ### Step 1 — train_semantic_codec.py [PASS]
-**Purpose:** Train per-device-type encoder/decoder (ECG + BloodPressure) VAE-style. Window=200, LatentDim=16.
+**Purpose:** Train per-device-type encoder/decoder (ECG + BloodPressure) VAE-style. Window=25, LatentDim=16.
 
 | Device        | Accuracy | F1[NORMAL] | F1[ALERT] | F1[CRITICAL] |
 |---------------|----------|------------|-----------|--------------|
@@ -269,12 +283,14 @@ End-to-end evaluation across 12 (network_condition × command) combinations.
 
 | Command           | Stable | Unstable | Critical |
 |-------------------|--------|----------|----------|
-| FULL_ECG          | 0.152  | 0.353    | 0.367    |
-| SEMANTIC_ALERT    | 0.276  | 0.441    | 0.376    |
-| SEMANTIC_CRITICAL | 0.528  | 0.315    | **0.528**|
-| SEMANTIC_SUMMARY  | 0.376  | 0.190    | 0.432    |
+| FULL_ECG          | NaN    | NaN      | NaN      |
+| SEMANTIC_ALERT    | 0.818  | 0.818    | 0.807    |
+| SEMANTIC_CRITICAL | 0.735  | 0.632    | **0.718**|
+| SEMANTIC_SUMMARY  | 0.327  | 0.758    | 0.787    |
 
-Overall clinical state F1: 0.380 · SLA compliance (SEMANTIC_CRITICAL <1000ms): 100% · Mean decode confidence: 0.574
+Overall clinical state F1: 0.732 · SLA compliance (SEMANTIC_CRITICAL <1000ms): 100.0% · Mean decode confidence: 0.572
+
+*Metric Clarification:* Note that `prediction_confidence` (the confidence of the XGBoost ML network classifier predicting network states, e.g., Stable, Unstable, Critical) and `decode_confidence` (the confidence of the semantic VAE decoder reconstructor predicting clinical health states) are distinct metrics from different pipelines. The evaluation pipeline uses the latter for assessing clinical state recovery fidelity.
 
 Outputs: `plots/semantic_fidelity/` (4 figures + summary_report.txt)
 
@@ -284,7 +300,7 @@ Outputs: `plots/semantic_fidelity/` (4 figures + summary_report.txt)
 
 | Constant           | Value |
 |--------------------|-------|
-| WINDOW_SIZE (codec)| 200 samples |
+| WINDOW_SIZE (codec)| 25 samples |
 | LATENT_DIM         | 16 |
 | CHUNK_SIZE (eval)  | 300 rows |
 | ECG devices        | dev10 (id=10), dev11 (id=11) [semantic eval only] |
@@ -422,58 +438,59 @@ The 99% training accuracy is explained by **deterministic label leakage**:
 | Evaluation | Accuracy |
 |---|---|
 | Synthetic training set (DO NOT CITE) | 99.0% — label leakage |
-| 5-fold TimeSeriesSplit on live baseline telemetry | **99.67% ± 0.21%** |
-| Out-of-Distribution (synthetic → live) | **98.9%** |
-| Confusion matrix (live data): Critical recall | **97.7%** |
+| 5-fold TimeSeriesSplit on live baseline telemetry | **99.88% ± 0.06%** |
+| Out-of-Distribution (synthetic → live) | **99.1%** |
+| Confusion matrix (live data): Critical recall | **98.1%** |
 
-**Citation rule:** Always cite the live CV score (99.67%) and OOD score (98.9%). Describe the model as a "soft heuristic approximator with temporal smoothing."
+**Citation rule:** Always cite the live CV score (99.88%) and OOD score (99.1%). Describe the model as a "soft heuristic approximator with temporal smoothing."
 
 ---
 
-## Final Controlled Experiment Results (May 10, 2026)
+## Final Controlled Experiment Results (May 18, 2026)
 
 **Run pair:**
-- Baseline: `baseline_natural_20260510_113738` (642 s)
-- Closed-loop: `closedloop_natural_20260510_131407` (642 s)
+- Baseline: `baseline_natural_20260518_093200` (674 s)
+- Closed-loop: `closedloop_natural_20260518_103309` (675 s)
 - Stress verification: **102/102 steps identical** (MaxDiff Loss=0.000, Delay=0.000, Jitter=0.000)
 
 ### 1. Network Condition (same input stress, different adaptation)
 
 | Metric | Baseline | Closed-Loop | Improvement |
 |--------|----------|-------------|-------------|
-| Packet Loss | 7.49% | 6.98% | −6.8% |
-| Avg Delay | 85.6 ms | 71.1 ms | −16.9% |
-| Jitter | 26.0 ms | 23.8 ms | −8.5% |
-| Throughput | 23.9 kbps | 15.2 kbps | −36.4% (semantic saving) |
-| Stable windows | 1081 / 2570 | **1305** / 2568 | **+20.7%** |
-| Critical windows | 922 / 2570 | **824** / 2568 | **−10.6%** |
+| Packet Loss | 7.51% | 5.90% | −21.4% |
+| Avg Delay | 93.8 ms | 77.0 ms | −17.9% |
+| Jitter | 31.7 ms | 28.2 ms | −11.0% |
+| Throughput | 23.8 kbps | 16.6 kbps | −30.3% (semantic saving) |
+| Stable windows | 1129 / 2699 | **1478** / 2702 | **+30.9%** |
+| Critical windows | 974 / 2699 | **802** / 2702 | **−17.7%** |
 
 ### 2. Throughput Savings by Network State
 
 | State | Baseline | Closed-Loop | Bandwidth Saving |
 |-------|----------|-------------|-----------------|
-| Stable | 24.4 kbps | 13.6 kbps | **−44.5%** |
-| Unstable | 25.7 kbps | 20.2 kbps | **−21.3%** |
-| Critical | 22.0 kbps | 15.0 kbps | **−31.9%** |
+| Stable | 25.5 kbps | 18.5 kbps | **−27.5%** |
+| Unstable | 24.8 kbps | 18.2 kbps | **−26.6%** |
+| Critical | 21.3 kbps | 12.3 kbps | **−42.4%** |
 
 ### 3. ML Predictor Performance (Closed-Loop)
-- Model active: **2537 / 2568 windows (98.8%)**
-- Mean confidence: **0.9793** | Min: 0.5000
-- Model-low-confidence fallbacks: 24 windows (0.9%)
+- Model active: **2674 / 2702 windows (99.0%)**
+- Mean confidence: **0.9833** | Min: 0.4981
+- Model-low-confidence fallbacks: 28 windows (1.0%)
 
 ### 4. Adaptation Latency
 | Percentile | Latency |
 |---|---|
-| p50 | 266 ms |
-| p90 | 754 ms |
+| p50 | 502 ms |
+| p90 | 755 ms |
 | p95 | 756 ms |
 | SEMANTIC_CRITICAL SLA (≤1000 ms) | **100.0%** |
 
 ### 5. Semantic Suppression
-- Total samples generated: 181,710
-- Sent: 128,971 (71.0%)
-- **Suppressed (semantic gating): 42,422 (23.3%)**
-- Net bandwidth reduction vs. raw transmission: ~29%
+- Total samples generated: 207,860
+- Sent: 181,355 (87.2%)
+- **Suppressed (semantic gating): 18,361 (8.8%)**
+- *Note:* An additional 8,144 samples (3.9%) were withheld by SUMMARY mode time-gating (by design) and are not counted as semantic suppression, closing the 100% arithmetic.
+- Net bandwidth reduction vs. raw transmission: ~12.8%
 
 ---
 

@@ -551,7 +551,7 @@ def fig3_confidence_vs_f1(cells: pd.DataFrame, output_dir: str) -> None:
 
 
 def fig4_latency_cdf(commands: pd.DataFrame, output_dir: str) -> None:
-    """Figure 4: Latency CDF per command type with SLA line."""
+    """Figure 4: Latency CDF per command type with SLA badge."""
     if commands.empty or "latency_ms" not in commands.columns:
         print("[FIG4] No command_log data — skipping latency CDF.")
         return
@@ -571,7 +571,7 @@ def fig4_latency_cdf(commands: pd.DataFrame, output_dir: str) -> None:
         "SEMANTIC_SUMMARY":   "#7f7f7f",
     }
 
-    fig, ax = plt.subplots(figsize=(10, 8))
+    fig, ax = plt.subplots(figsize=(7.5, 6))
 
     sla_compliance_critical: Optional[float] = None
 
@@ -582,32 +582,54 @@ def fig4_latency_cdf(commands: pd.DataFrame, output_dir: str) -> None:
         sorted_vals = np.sort(subset)
         cdf = np.arange(1, len(sorted_vals) + 1) / len(sorted_vals)
         color = COMMAND_COLORS.get(cmd, "#888888")
-        ax.step(sorted_vals, cdf, where="post", label=cmd, color=color, linewidth=1.6)
+        ax.step(sorted_vals, cdf, where="post", label=cmd, color=color, linewidth=2.0)
 
         if cmd == "SEMANTIC_CRITICAL":
             within_sla = float(np.mean(subset <= SLA_MS)) * 100.0
             sla_compliance_critical = within_sla
 
-    ax.axvline(SLA_MS, color="black", linestyle="--", linewidth=1.3, label=f"SLA = {SLA_MS:.0f} ms")
+    # Calculate overall SLA compliance
+    within_sla_all = float(np.mean(commands["latency_ms"] <= SLA_MS)) * 100.0
 
+    # Add a styled badge for the SLA in the empty top-left region
     if sla_compliance_critical is not None:
-        ax.text(
-            SLA_MS + 20, 0.05,
-            f"SEMANTIC_CRITICAL\nwithin SLA: {sla_compliance_critical:.1f}%",
-            fontsize=8, color=COMMAND_COLORS.get("SEMANTIC_CRITICAL", "red"),
-            va="bottom",
+        badge_text = (
+            f"SLA Target: {SLA_MS:.0f} ms\n"
+            f"Overall Compliance: {within_sla_all:.1f}%\n"
+            f"Critical Compliance: {sla_compliance_critical:.1f}%"
         )
+    else:
+        badge_text = (
+            f"SLA Target: {SLA_MS:.0f} ms\n"
+            f"Overall Compliance: {within_sla_all:.1f}%"
+        )
+
+    props = dict(boxstyle='round,pad=0.6', facecolor='#f8f9fa', edgecolor='#cfd8dc', alpha=0.95, zorder=5)
+    ax.text(0.04, 0.96, badge_text, transform=ax.transAxes, fontsize=9.5,
+            verticalalignment='top', bbox=props, weight='bold', color='#2c3e50')
 
     ax.set_xlabel("Command latency (ms)")
     ax.set_ylabel("Cumulative fraction")
-    ax.set_title("Command latency CDF by command type")
-    ax.set_xlim(left=0)
+    ax.set_title("Command Latency CDF by Command Type")
+    
+    # Zoom x-axis to the actual data range dynamically (plus a small margin)
+    max_lat = commands["latency_ms"].max()
+    ax.set_xlim(0, max(80.0, float(max_lat) * 1.15))
     ax.set_ylim(0, 1.05)
-    ax.legend(loc="lower right")
+    
+    # Clean grid and spines
+    ax.grid(True, which='both', linestyle='--', linewidth=0.5, alpha=0.7)
+    if 'top' in ax.spines:
+        ax.spines['top'].set_visible(False)
+    if 'right' in ax.spines:
+        ax.spines['right'].set_visible(False)
+
+    ax.legend(loc="lower right", frameon=True, facecolor="white", edgecolor="#cccccc", fontsize=8.5)
 
     fig.tight_layout()
     _save(fig, os.path.join(output_dir, "fig4_latency_cdf"))
-    print("[FIG4] Saved latency CDF.")
+    _save(fig, os.path.join(output_dir, "fig_latency_cdf"))
+    print("[FIG4] Saved latency CDF as fig4_latency_cdf and fig_latency_cdf.")
 
 
 # ---------------------------------------------------------------------------

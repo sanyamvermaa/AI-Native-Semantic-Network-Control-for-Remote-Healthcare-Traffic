@@ -48,7 +48,7 @@ from channel_quantizer import quantize, dequantize  # noqa: E402
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-WINDOW_SIZE = 200      # rows per window — must match metadata.json window_size
+WINDOW_SIZE = 25       # rows per window — must match metadata.json window_size
 LATENT_DIM  = 16
 
 # Devices to process: (device_id, device_type)
@@ -94,7 +94,7 @@ _LATENCY_COND_EXTRA: Dict[str, float] = {
 # Telemetry stride: write one telemetry row every N packets within a window.
 # At 100 Hz (dt=0.01 s), stride=50 → 0.5 s between telemetry rows.
 # merge_asof tolerance=0.6 s → every packet is within 0.25 s of a tele row.
-TELE_STRIDE = 50   # one telemetry row per 0.5 s (200-sample window / 4)
+TELE_STRIDE = 25   # one telemetry row per 0.25 s (25-sample window)
 
 LABEL_CLASSES = ["NORMAL", "ALERT", "CRITICAL"]
 # Severity rank: higher = worse
@@ -185,8 +185,8 @@ def main() -> None:
     n_windows = n_rows // WINDOW_SIZE
 
     print(f"[INFO] Devices    : {dev_ids}")
-    print(f"[INFO] Rows/device: {n_rows}  →  {n_windows} windows of {WINDOW_SIZE} rows")
-    print(f"[INFO] Combos     : {len(COMBOS)} → ~{n_windows // len(COMBOS)} windows/cell")
+    print(f"[INFO] Rows/device: {n_rows}  ->  {n_windows} windows of {WINDOW_SIZE} rows")
+    print(f"[INFO] Combos     : {len(COMBOS)} -> ~{n_windows // len(COMBOS)} windows/cell")
 
     # ------------------------------------------------------------------
     # 2. Create one SemanticEncoder per device_id (not per device_type)
@@ -265,16 +265,15 @@ def main() -> None:
         health_state = _worst_case_label(decoded_states) if decoded_states else "NORMAL"
         mean_conf    = float(np.mean(confidences)) if confidences else 0.5
 
-        # Window end timestamp (use last row from first device as reference)
         ts_ref_df = devices[dev_ids[0]][1]
-        ts_end    = float(ts_ref_df.at[row_end - 1, "timestamp"])
+        ts_start  = float(ts_ref_df.at[row_start, "timestamp"])
 
         # --- Latency -------------------------------------------------------
         lat_ms = _sim_latency(cmd, net_cond, rng)
 
         # --- Command log (one per window) ----------------------------------
         command_rows.append({
-            "timestamp":           ts_end,
+            "timestamp":           ts_start,
             "network_state":       net_cond,
             "health_state":        health_state,
             "command":             cmd,
@@ -294,11 +293,11 @@ def main() -> None:
                 "semantic_packets_in_window": WINDOW_SIZE * len(encoders),
             })
 
-        # --- Enriched sender packets (encoded = True) ----------------------
+        # --- Enriched sender packets (encoded = True for semantic commands) -
         for dev_id, (dtype, df) in devices.items():
             for idx in range(row_start, row_end):
                 row_dict            = df.iloc[idx].to_dict()
-                row_dict["encoded"] = True
+                row_dict["encoded"] = cmd.startswith("SEMANTIC_")
                 enriched_pkts[dev_id].append(row_dict)
 
     # Tail rows (< one full window) — keep as non-encoded

@@ -102,7 +102,7 @@ DEVICE_PROFILES: Dict[str, Dict] = {
 
 CLINICAL_THRESHOLDS: Dict[str, Dict] = {
     "ECG":           {"warn": 100, "critical": 130, "low_warn": 50,  "low_critical": 40},
-    "SpO2":          {"warn": 94,  "critical": 90,  "low_warn": None, "low_critical": None},
+    "SpO2":          {"warn": None, "critical": None, "low_warn": 94, "low_critical": 90},
     "BloodPressure": {"warn": 140, "critical": 160, "low_warn": 90,  "low_critical": 80},
     "Temperature":   {"warn": 376, "critical": 385, "low_warn": 355, "low_critical": 350},
     "Respiration":   {"warn": 22,  "critical": 28,  "low_warn": 8,   "low_critical": 5},

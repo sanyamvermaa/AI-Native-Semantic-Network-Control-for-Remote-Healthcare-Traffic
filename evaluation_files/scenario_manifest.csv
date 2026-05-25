@@ -1,0 +1,103 @@
+step,phase,loss_pct,delay_ms,jitter_ms,sleep_s
+0,Phase 1 — Morning stable (quiet ward),0.3,12.0,2.0,5
+1,Phase 1 — Morning stable (quiet ward),0.3,12.0,2.0,5
+2,Phase 1 — Morning stable (quiet ward),0.3,12.0,2.0,5
+3,Phase 1 — Morning stable (quiet ward),0.278,11.7,1.8,8
+4,Phase 1 — Morning stable (quiet ward),0.318,12.7,2.0,8
+5,Phase 1 — Morning stable (quiet ward),0.319,11.5,2.0,8
+6,Phase 1 — Morning stable (quiet ward),0.278,11.6,1.9,8
+7,Phase 1 — Morning stable (quiet ward),0.289,12.5,2.1,8
+8,Phase 1 — Morning stable (quiet ward),0.287,11.8,2.0,8
+9,Phase 1 — Morning stable (quiet ward),0.312,12.2,2.1,8
+10,Phase 1 — Morning stable (quiet ward),0.279,12.3,2.1,8
+11,Phase 2 — Gradual degradation (shift change),0.77,17.8,3.2,4
+12,Phase 2 — Gradual degradation (shift change),1.24,23.6,4.4,4
+13,Phase 2 — Gradual degradation (shift change),1.71,29.4,5.6,4
+14,Phase 2 — Gradual degradation (shift change),2.18,35.2,6.8,4
+15,Phase 2 — Gradual degradation (shift change),2.65,41.0,8.0,4
+16,Phase 2 — Gradual degradation (shift change),3.12,46.8,9.2,4
+17,Phase 2 — Gradual degradation (shift change),3.59,52.6,10.4,4
+18,Phase 2 — Gradual degradation (shift change),4.06,58.4,11.6,4
+19,Phase 2 — Gradual degradation (shift change),4.53,64.2,12.8,4
+20,Phase 2 — Gradual degradation (shift change),5.0,70.0,14.0,4
+21,Phase 2 — Gradual degradation (shift change),4.899,74.6,15.0,8
+22,Phase 2 — Gradual degradation (shift change),4.872,68.4,15.2,8
+23,Phase 2 — Gradual degradation (shift change),5.181,69.6,12.8,8
+24,Phase 2 — Gradual degradation (shift change),5.354,72.1,14.7,8
+25,Phase 2 — Gradual degradation (shift change),5.246,69.3,14.9,8
+26,Phase 3 — Brief partial recovery,4.4,63.0,12.6,4
+27,Phase 3 — Brief partial recovery,3.8,56.0,11.2,4
+28,Phase 3 — Brief partial recovery,3.2,49.0,9.8,4
+29,Phase 3 — Brief partial recovery,2.6,42.0,8.4,4
+30,Phase 3 — Brief partial recovery,2.0,35.0,7.0,4
+31,Phase 3 — Brief partial recovery,2.025,37.4,7.3,8
+32,Phase 3 — Brief partial recovery,1.998,36.5,7.5,8
+33,Phase 4 — Escalation to critical (busy hour),3.2,51.5,11.8,5
+34,Phase 4 — Escalation to critical (busy hour),4.4,68.0,16.6,5
+35,Phase 4 — Escalation to critical (busy hour),5.6,84.5,21.4,5
+36,Phase 4 — Escalation to critical (busy hour),6.8,101.0,26.2,5
+37,Phase 4 — Escalation to critical (busy hour),8.0,117.5,31.0,5
+38,Phase 4 — Escalation to critical (busy hour),9.2,134.0,35.8,5
+39,Phase 4 — Escalation to critical (busy hour),10.4,150.5,40.6,5
+40,Phase 4 — Escalation to critical (busy hour),11.6,167.0,45.4,5
+41,Phase 4 — Escalation to critical (busy hour),12.8,183.5,50.2,5
+42,Phase 4 — Escalation to critical (busy hour),14.0,200.0,55.0,5
+43,Phase 4 — Escalation to critical (busy hour),14.986,205.2,50.9,8
+44,Phase 4 — Escalation to critical (busy hour),13.331,189.7,50.5,8
+45,Phase 4 — Escalation to critical (busy hour),14.452,196.9,57.7,8
+46,Phase 5 — Sustained critical (peak congestion),15.0,215.0,58.8,4
+47,Phase 5 — Sustained critical (peak congestion),16.0,230.0,62.5,4
+48,Phase 5 — Sustained critical (peak congestion),17.0,245.0,66.2,4
+49,Phase 5 — Sustained critical (peak congestion),18.0,260.0,70.0,4
+50,Phase 5 — Sustained critical (peak congestion),19.177,260.5,64.2,8
+51,Phase 5 — Sustained critical (peak congestion),17.723,244.5,75.2,8
+52,Phase 5 — Sustained critical (peak congestion),17.676,254.1,70.1,8
+53,Phase 5 — Sustained critical (peak congestion),16.873,259.0,65.2,8
+54,Phase 5 — Sustained critical (peak congestion),18.021,272.4,73.2,8
+55,Phase 5 — Sustained critical (peak congestion),17.954,268.6,65.8,8
+56,Phase 5 — Sustained critical (peak congestion),16.857,259.6,67.3,8
+57,Phase 5 — Sustained critical (peak congestion),16.87,252.9,63.8,8
+58,Phase 6 — Slow recovery to Unstable,16.6,239.5,64.1,5
+59,Phase 6 — Slow recovery to Unstable,15.2,219.0,58.2,5
+60,Phase 6 — Slow recovery to Unstable,13.8,198.5,52.3,5
+61,Phase 6 — Slow recovery to Unstable,12.4,178.0,46.4,5
+62,Phase 6 — Slow recovery to Unstable,11.0,157.5,40.5,5
+63,Phase 6 — Slow recovery to Unstable,9.6,137.0,34.6,5
+64,Phase 6 — Slow recovery to Unstable,8.2,116.5,28.7,5
+65,Phase 6 — Slow recovery to Unstable,6.8,96.0,22.8,5
+66,Phase 6 — Slow recovery to Unstable,5.4,75.5,16.9,5
+67,Phase 6 — Slow recovery to Unstable,4.0,55.0,11.0,5
+68,Phase 6 — Slow recovery to Unstable,4.162,55.6,11.8,8
+69,Phase 6 — Slow recovery to Unstable,4.225,56.5,10.4,8
+70,Phase 7 — Stable recovery window,3.417,48.3,9.7,4
+71,Phase 7 — Stable recovery window,2.833,41.7,8.3,4
+72,Phase 7 — Stable recovery window,2.25,35.0,7.0,4
+73,Phase 7 — Stable recovery window,1.667,28.3,5.7,4
+74,Phase 7 — Stable recovery window,1.083,21.7,4.3,4
+75,Phase 7 — Stable recovery window,0.5,15.0,3.0,4
+76,Phase 7 — Stable recovery window,0.512,14.7,2.8,8
+77,Phase 7 — Stable recovery window,0.506,15.5,3.2,8
+78,Phase 7 — Stable recovery window,0.521,14.6,3.0,8
+79,Phase 7 — Stable recovery window,0.524,15.5,2.7,8
+80,Phase 7 — Stable recovery window,0.524,14.7,2.9,8
+81,Phase 8 — Sharp interference burst (equipment),7.0,83.3,26.0,3
+82,Phase 8 — Sharp interference burst (equipment),13.5,151.7,49.0,3
+83,Phase 8 — Sharp interference burst (equipment),20.0,220.0,72.0,3
+84,Phase 8 — Sharp interference burst (equipment),19.66,234.7,75.8,8
+85,Phase 8 — Sharp interference burst (equipment),18.507,217.1,70.3,8
+86,Phase 9 — Fast recovery post-burst,16.2,180.0,58.4,4
+87,Phase 9 — Fast recovery post-burst,12.4,140.0,44.8,4
+88,Phase 9 — Fast recovery post-burst,8.6,100.0,31.2,4
+89,Phase 9 — Fast recovery post-burst,4.8,60.0,17.6,4
+90,Phase 9 — Fast recovery post-burst,1.0,20.0,4.0,4
+91,Phase 9 — Fast recovery post-burst,1.053,21.0,3.6,8
+92,Phase 9 — Fast recovery post-burst,0.966,18.7,4.3,8
+93,Phase 10 — Stable finish,0.8,17.5,3.5,4
+94,Phase 10 — Stable finish,0.6,15.0,3.0,4
+95,Phase 10 — Stable finish,0.4,12.5,2.5,4
+96,Phase 10 — Stable finish,0.2,10.0,2.0,4
+97,Phase 10 — Stable finish,0.216,9.7,2.0,8
+98,Phase 10 — Stable finish,0.196,10.3,1.9,8
+99,Phase 10 — Stable finish,0.186,9.7,2.1,8
+100,Phase 10 — Stable finish,0.185,9.4,2.0,8
+101,Phase 10 — Stable finish,0.195,9.7,2.1,8

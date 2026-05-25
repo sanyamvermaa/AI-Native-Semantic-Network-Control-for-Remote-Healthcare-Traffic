@@ -125,6 +125,7 @@ telemetry_writer.writerow(
         "drain_avg_ms",
         "drain_budget_hits",
         "drain_backlog_hits",
+        "decode_confidence",
     ]
 )
 telemetry_file.flush() #ensure header is written to disk immediately
@@ -757,6 +758,7 @@ def flush_telemetry(now: float) -> None:
             round(drain_avg_ms, 3),
             int(drain_budget_hits),
             int(drain_backlog_hits),
+            round(avg_decode_confidence, 4) if avg_decode_confidence is not None else "",
         ]
     )
     telemetry_file.flush()

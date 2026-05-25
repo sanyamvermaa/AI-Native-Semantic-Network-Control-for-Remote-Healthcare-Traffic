@@ -405,7 +405,7 @@ def fig2_throughput_timeline(df: pd.DataFrame, out_dir: str,
 
     ax1.fill_between(df_a["elapsed"], thr, alpha=0.22, color="#2980b9")
     ax1.plot(df_a["elapsed"], thr,  color="#2980b9",
-             linewidth=1.8, label="Throughput (kbps)")
+             linewidth=1.8, label="Network Load (kbps)")
     ax1.plot(df_a["elapsed"], bw,   color="#7f8c8d",
              linewidth=0.9, linestyle="--", alpha=0.7,
              label="Bandwidth usage (kbps)")
@@ -426,8 +426,8 @@ def fig2_throughput_timeline(df: pd.DataFrame, out_dir: str,
     h2, l2 = ax1_r.get_legend_handles_labels()
     ax1.legend(h1 + h2, l1 + l2, loc="upper right",
                framealpha=0.92, fontsize=8.5, ncol=3)
-    ax1.set_ylabel("Throughput / BW (kbps)")
-    ax1.set_title(f"{run_label} — Throughput over Time", pad=8)
+    ax1.set_ylabel("Network Load / BW (kbps)")
+    ax1.set_title(f"{run_label} — Network Load over Time", pad=8)
 
     if phases:
         add_phase_vlines(ax1, top_labels=True)
@@ -873,8 +873,8 @@ def fig8_throughput_savings(b_tel: pd.DataFrame, cl_tel: pd.DataFrame,
 
     ax.set_xticks(x)
     ax.set_xticklabels(STATE_ORDER)
-    ax.set_ylabel("Mean Throughput (kbps)")
-    ax.set_title("Throughput Savings by Network State\n"
+    ax.set_ylabel("Mean Network Load (kbps)")
+    ax.set_title("Network Load Savings by Network State\n"
                  "(+ = closed-loop uses less bandwidth)")
     ax.legend(framealpha=0.9)
     save_fig(fig, out_dir, "fig8_throughput_savings", formats)
@@ -1001,9 +1001,9 @@ def fig10_composite_summary(df: pd.DataFrame, out_dir: str,
             else "throughput_bps")
     ax_c.fill_between(df_a["elapsed"], df_a[col3] / 1000, alpha=0.22, color="#27ae60")
     ax_c.plot(df_a["elapsed"], df_a[col3] / 1000, color="#27ae60", linewidth=1.5)
-    ax_c.set_ylabel("Throughput (kbps)")
+    ax_c.set_ylabel("Network Load (kbps)")
     ax_c.set_xlabel("Elapsed Time (s)")
-    ax_c.set_title("(C) Throughput", loc="left")
+    ax_c.set_title("(C) Network Load", loc="left")
     ax_c.set_xlim(0, df["elapsed"].max())
     add_phase_vlines(ax_c, top_labels=False)
 

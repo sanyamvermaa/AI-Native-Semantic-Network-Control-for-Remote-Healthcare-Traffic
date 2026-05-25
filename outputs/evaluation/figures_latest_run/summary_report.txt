@@ -1,0 +1,34 @@
+══════════════════════════════════════════════════════════════════
+  AI-Native Semantic Network Control — Results Summary
+══════════════════════════════════════════════════════════════════
+
+── 1. Network Metrics ────────────────────────────────────────────
+  Baseline (674s):
+    Loss  : 7.51%
+    Delay : 93.8 ms
+    Jitter: 31.7 ms
+    Thr   : 23.8 kbps
+    State dist: Stable=1129, Unstable=596, Critical=974
+  Closed-Loop (675s):
+    Loss  : 5.90%
+    Delay : 77.0 ms
+    Jitter: 28.2 ms
+    Thr   : 16.6 kbps
+    State dist: Stable=1478, Unstable=422, Critical=802
+
+── 2. Throughput Savings (CL vs Baseline) ────────────────────────
+  Stable      : +27.5% saving  (baseline=25.5kbps, CL=18.5kbps)
+  Unstable    : +26.6% saving  (baseline=24.8kbps, CL=18.2kbps)
+  Critical    : +42.4% saving  (baseline=21.3kbps, CL=12.3kbps)
+
+── 3. ML Predictor (Closed-Loop) ─────────────────────────────────
+  Model active : 2674/2702 windows
+  Confidence   : mean=0.9833  min=0.4981
+
+── 4. Adaptation Latency ─────────────────────────────────────────
+  p50=502ms  p90=755ms  p95=756ms  N=613
+
+── 5. Semantic Suppression (Closed-Loop) ─────────────────────────
+  Samples: 207,860  Sent: 181,355 (87.2%)  Suppressed: 18,361 (8.8%)
+══════════════════════════════════════════════════════════════════
+
