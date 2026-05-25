@@ -93,7 +93,7 @@ def _worst_label(series: pd.Series) -> str:
 
 
 def _save(fig: plt.Figure, path_no_ext: str) -> None:
-    for ext in ("pdf", "png"):
+    for ext in ("pdf", "png", "eps"):
         fig.savefig(f"{path_no_ext}.{ext}", bbox_inches="tight")
     plt.close(fig)
 
