@@ -1,9 +1,0 @@
-==============================================================
-  Semantic Fidelity Summary Report
-==============================================================
-Overall clinical state F1 (all modes, all conditions): 0.732  [1188 windows @ 0.25 s]
-Best mode under critical network:  SEMANTIC_ALERT  —  F1=0.807,  BW reduction=-212.5%
-Worst mode under critical network: SEMANTIC_CRITICAL  —  F1=0.718
-SLA compliance (SEMANTIC_CRITICAL within 1000 ms): 100.0%
-Mean decode confidence (encoded cells): 0.572
-==============================================================
